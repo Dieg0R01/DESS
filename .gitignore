@@ -1,0 +1,19 @@
+# Maven / Java
+target/
+build/
+.gradle/
+*.class
+*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.log
+.env*
