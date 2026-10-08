@@ -1,5 +1,7 @@
 # DESS — Distributed Event Streaming System
 
+[![ci](https://github.com/Dieg0R01/DESS/actions/workflows/ci.yml/badge.svg)](https://github.com/Dieg0R01/DESS/actions/workflows/ci.yml)
+
 > A publish/subscribe message broker written from scratch in plain Java, built as the practical project for a **Distributed Systems** course in Computer Engineering.
 
 DESS is a small event streaming platform inspired by the architecture of systems like Apache Kafka and RabbitMQ. Producers publish events to named **topics**, a central **broker** buffers, persists and routes those events, and consumers subscribed to a topic receive them in real time. An HTTP **admin API** allows the broker to be inspected and managed from the outside.
@@ -279,7 +281,6 @@ Tentative shape:
 ### Build
 
 ```bash
-# TODO
 mvn clean verify
 ```
 
