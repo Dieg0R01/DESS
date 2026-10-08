@@ -6,7 +6,7 @@ DESS is a small event streaming platform inspired by the architecture of systems
 
 The goal is not to compete with production brokers, but to implement by hand — on top of the JDK — the building blocks that a distributed system relies on: networking over TCP and UDP, multithreading and synchronization, durable storage, XML configuration, TLS encryption, message integrity and a web management interface.
 
-> **Status:** design phase. No code has been written yet. This document describes the target architecture and the incremental plan to build it.
+> **Status:** design stage. No code has been written yet. This document describes the target architecture.
 
 ---
 
@@ -19,9 +19,8 @@ The goal is not to compete with production brokers, but to implement by hand —
 - [Module map](#module-map)
 - [Technology stack](#technology-stack)
 - [Configuration](#configuration)
+- [Admin API](#admin-api)
 - [Getting started](#getting-started)
-- [Development phases](#development-phases)
-- [Open design questions](#open-design-questions)
 
 ---
 
@@ -44,7 +43,7 @@ The goal is not to compete with production brokers, but to implement by hand —
 - Exactly-once delivery semantics.
 - Compatibility with the Kafka, AMQP or MQTT wire protocols.
 
-These may be revisited once the five core phases are complete.
+These may be revisited once the core system is complete.
 
 ---
 
@@ -123,7 +122,7 @@ flowchart LR
 
 ## Message lifecycle
 
-The end-to-end journey of a single message, once all phases are in place:
+The end-to-end journey of a single message through the complete system:
 
 ```mermaid
 sequenceDiagram
@@ -159,18 +158,20 @@ sequenceDiagram
 
 ## Wire protocol
 
-Clients and broker talk through a simple, line-oriented text protocol over TCP. Each frame is a single line terminated by `\n`, with fields separated by `:`.
+Clients and broker talk through a small, versioned protocol over TCP. Every frame carries a command, its fields and, when present, a payload whose length is declared explicitly, so payloads are opaque bytes that never need escaping.
 
-| Command | Direction | Format | Description |
+| Command | Direction | Fields | Description |
 |---------|-----------|--------|-------------|
-| `SUBSCRIBE` | client → broker | `SUBSCRIBE:<topic>` | Register the connection as a subscriber of `<topic>`. |
-| `UNSUBSCRIBE` | client → broker | `UNSUBSCRIBE:<topic>` | Stop receiving messages from `<topic>`. |
-| `PUBLISH` | client → broker | `PUBLISH:<topic>:<payload>:<sha256>` | Publish a message. The hash is verified by the broker. |
-| `DELIVER` | broker → client | `DELIVER:<topic>:<payload>:<sha256>` | A message pushed to a subscriber. |
-| `ACK` | both | `ACK:<message-id>` | Confirmation of reception / processing. |
-| `ERROR` | broker → client | `ERROR:<code>:<reason>` | Rejected request (unknown topic, bad hash, unauthorized…). |
+| `HELLO` | both | protocol version | Opens every connection; incompatible versions are rejected. |
+| `SUBSCRIBE` | client → broker | topic, start position | Register as a subscriber of a topic, from the latest, the earliest or a given offset. |
+| `UNSUBSCRIBE` | client → broker | topic | Stop receiving messages from a topic. |
+| `PUBLISH` | client → broker | topic, confirmation mode, SHA-256 digest, payload | Publish a message; the digest is verified by the broker. |
+| `DELIVER` | broker → client | topic, offset, digest, payload | A message pushed to a subscriber. |
+| `ACK` | both | topic, offset | Confirms acceptance (broker → producer) or processing (consumer → broker). |
+| `PING` / `PONG` | both | — | Heartbeat that keeps idle connections alive. |
+| `ERROR` | broker → client | code, reason | Rejected request, with a stable error code. |
 
-Discovery uses a separate UDP exchange (`DISCOVER` request, broker address in the reply). The exact framing, payload encoding and message identifiers are still open — see [Open design questions](#open-design-questions).
+Discovery uses a separate UDP exchange: a client broadcasts a `DISCOVER` datagram and the broker replies with its address, port, protocol version and whether TLS is required. The exact byte layout of each frame is documented together with its implementation.
 
 ---
 
@@ -268,7 +269,7 @@ Tentative shape:
 
 ## Getting started
 
-> 🚧 **Placeholder.** This section will be filled in as each phase lands.
+> 🚧 **Placeholder.** This section will be filled in as the implementation lands.
 
 ### Prerequisites
 
@@ -278,21 +279,21 @@ Tentative shape:
 ### Build
 
 ```bash
-# TODO: available from Phase 1
+# TODO
 mvn clean verify
 ```
 
 ### Run the broker
 
 ```bash
-# TODO: available from Phase 1
+# TODO
 java -jar dess-broker/target/dess-broker.jar --config config/config.xml
 ```
 
 ### Run a consumer and a producer
 
 ```bash
-# TODO: available from Phase 1
+# TODO
 java -jar dess-client/target/dess-client.jar consume --topic sales
 java -jar dess-client/target/dess-client.jar produce --topic sales --message "hello"
 ```
@@ -300,99 +301,29 @@ java -jar dess-client/target/dess-client.jar produce --topic sales --message "he
 ### Generate TLS certificates
 
 ```bash
-# TODO: available from Phase 4 (keytool scripts under config/)
+# TODO: keytool scripts under config/
 ```
 
 ### Query the admin API
 
 ```bash
-# TODO: available from Phase 5
+# TODO
 curl http://localhost:8080/metrics
 ```
 
 ---
 
-## Development phases
+## Admin API
 
-The system is built incrementally in five sequential phases. Each phase produces a working, demonstrable system and adds one layer of distributed-systems concepts on top of the previous one.
-
-```mermaid
-flowchart LR
-    F1["Phase 1<br/>Basic sockets"] --> F2["Phase 2<br/>Advanced concurrency"]
-    F2 --> F3["Phase 3<br/>Persistence & XML"]
-    F3 --> F4["Phase 4<br/>Security & UDP discovery"]
-    F4 --> F5["Phase 5<br/>REST admin API"]
-```
-
-### Phase 1 — Basic sockets
-
-Multithreaded TCP server, plus a producer client and a consumer client exchanging plain-text messages.
-
-- `ServerSocket` accept loop delegating each connection to an `ExecutorService`.
-- First version of the text protocol (`SUBSCRIBE`, `PUBLISH`, `DELIVER`).
-- Disconnection detection with `setSoTimeout()` and graceful close with `shutdownOutput()`.
-
-**Done when:** with the broker running, a consumer subscribed to a topic receives every message a producer publishes to it, in order, and closing either client does not affect the broker or other clients.
-
-### Phase 2 — Advanced concurrency
-
-Organize topics in a `ConcurrentHashMap` and decouple reception from delivery with per-topic `BlockingQueue`s.
-
-- Topic registry with thread-safe subscriber sets.
-- One dispatcher thread per topic (producer–consumer pattern).
-- `Semaphore`-based flow control and `CountDownLatch`-based delivery acknowledgements.
-
-**Done when:** several producers and consumers on different topics run concurrently without message loss or cross-topic leakage, and a slow consumer does not stall delivery to the others.
-
-### Phase 3 — Persistence and XML
-
-Load the broker configuration from `config.xml` with JAXB and persist messages to disk with Java I/O.
-
-- JAXB-mapped configuration model with validation of required fields.
-- Append-only binary log per topic (`DataOutputStream` + `BufferedOutputStream`).
-- Log replay on startup.
-
-**Done when:** the broker starts using only the values in `config.xml`, and messages published before a broker restart are still available after it.
-
-### Phase 4 — Security and UDP discovery
-
-Add automatic discovery over UDP and replace plain sockets with TLS.
-
-- UDP discovery responder in the broker and discovery logic in the clients.
-- `SSLServerSocket` / `SSLSocket` with keystore and truststore generated by `keytool`.
-- Mandatory client certificates for producers.
-- SHA-256 hash verification on every published message.
-
-**Done when:** clients connect without a hard-coded broker address, all traffic is encrypted, producers without a valid certificate are rejected, and a message with a tampered hash is refused with an `ERROR` frame.
-
-### Phase 5 — REST admin API
-
-Expose an HTTP API for management and monitoring, plus a CLI client to use it.
+The broker exposes a small resource-oriented HTTP API for management and monitoring, bound to the loopback interface by default. The `dess-admin` command-line tool wraps the same operations.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/topics` | List active topics and the number of retained messages per topic. |
+| `GET` | `/topics` | List topics with their retained messages, subscribers and queue depth. |
 | `POST` | `/topics` | Create a topic. Body: `{"name": "sensor-temperature"}`. |
-| `DELETE` | `/topics/{name}` | Delete a topic and disconnect its subscribers. |
-| `GET` | `/metrics` | Active threads, memory usage and messages per second. |
-
-**Done when:** every endpoint above works against a live broker, and the admin CLI can perform the same operations using `java.net.http.HttpClient`.
-
----
-
-## Open design questions
-
-| ID | Question | Status |
-|----|----------|--------|
-| Q-01 | How are payloads containing `:` or newlines encoded on the wire (escaping, Base64, length-prefixed frames)? | Open |
-| Q-02 | How are message IDs generated and assigned (per topic offset, UUID, broker sequence)? | Open |
-| Q-03 | What happens to messages published to a topic with no subscribers: retained, dropped or replayed on subscribe? | Open |
-| Q-04 | How does a consumer resume after a reconnect: from the latest message or from its last acknowledged one? | Open |
-| Q-05 | Do consumers also need certificates, or only producers? | Open |
-| Q-06 | Should UDP also carry periodic presence heartbeats, in addition to discovery? | Open |
-| Q-07 | Which HTTP stack serves the admin API: a JAX-RS implementation or the JDK built-in `HttpServer`? | Open |
-
-These will be resolved as the corresponding phases are planned in detail.
+| `DELETE` | `/topics/{name}` | Delete a topic; its subscribers are notified and its log is removed. |
+| `GET` | `/metrics` | Message rates, connections, threads, memory, in-flight messages and uptime. |
+| `GET` | `/health` | Whether the broker is currently accepting client connections. |
 
 ---
 
