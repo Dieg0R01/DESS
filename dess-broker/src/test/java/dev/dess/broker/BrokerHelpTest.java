@@ -1,0 +1,69 @@
+package dev.dess.broker;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+class BrokerHelpTest {
+
+    @Test
+    void helpFlagExitsZeroWithNameVersionAndUsage() throws Exception {
+        Result help = run("--help");
+        assertEquals(0, help.exitCode());
+        assertEquals("", help.stderr());
+        assertEquals(expectedHelp("dess-broker"), help.stdout());
+
+        Result shortHelp = run("-h");
+        assertEquals(0, shortHelp.exitCode());
+        assertEquals("", shortHelp.stderr());
+        assertEquals(help.stdout(), shortHelp.stdout());
+    }
+
+    @Test
+    void anyOtherInvocationExitsTwoWithUsageOnStderr() throws Exception {
+        Result unknown = run("--bogus");
+        assertEquals(2, unknown.exitCode());
+        assertEquals("", unknown.stdout());
+        assertEquals(expectedUsage("dess-broker"), unknown.stderr());
+
+        Result none = run();
+        assertEquals(2, none.exitCode());
+        assertEquals("", none.stdout());
+        assertEquals(expectedUsage("dess-broker"), none.stderr());
+    }
+
+    private static String expectedHelp(String artifact) {
+        return artifact + System.lineSeparator() + "dev" + System.lineSeparator() + "Usage: " + artifact + " --help | -h" + System.lineSeparator();
+    }
+
+    private static String expectedUsage(String artifact) {
+        return "Usage: " + artifact + " --help | -h" + System.lineSeparator();
+    }
+
+    private static Result run(String... args) throws IOException, InterruptedException {
+        List<String> command = new ArrayList<>();
+        command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        command.add("-cp");
+        command.add(System.getProperty("java.class.path"));
+        command.add("dev.dess.broker.BrokerMain");
+        command.addAll(List.of(args));
+        Path out = Files.createTempFile("dess-broker-out", ".txt");
+        Path err = Files.createTempFile("dess-broker-err", ".txt");
+        try {
+            Process process = new ProcessBuilder(command).redirectOutput(out.toFile()).redirectError(err.toFile()).start();
+            int code = process.waitFor();
+            return new Result(code, Files.readString(out), Files.readString(err));
+        } finally {
+            Files.deleteIfExists(out);
+            Files.deleteIfExists(err);
+        }
+    }
+
+    private record Result(int exitCode, String stdout, String stderr) {
+    }
+}
