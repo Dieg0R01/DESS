@@ -1,6 +1,9 @@
 package dev.dess.common.cli;
 
+import dev.dess.common.logging.Logging;
 import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class Help {
 
@@ -8,18 +11,56 @@ public final class Help {
     }
 
     public static int execute(String artifact, Class<?> owner, String[] args, PrintStream out, PrintStream err) {
-        if (isHelp(args)) {
-            out.println(artifact);
-            out.println(version(owner));
-            out.println(usage(artifact));
+        String requested = requestedLevel(args);
+        if (requested == null) {
+            requested = System.getProperty("dess.log.level", "INFO");
+        }
+        Logging.configure(requested);
+        String component = owner.getPackageName();
+        if (isHelp(withoutLevel(args))) {
+            out.println(Logging.format(Logging.level(), component, artifact));
+            out.println(Logging.format(Logging.level(), component, version(owner)));
+            out.println(Logging.format(Logging.level(), component, usage(artifact)));
             return 0;
         }
-        err.println(usage(artifact));
+        err.println(Logging.format("INFO", component, usage(artifact)));
         return 2;
     }
 
+    private static String requestedLevel(String[] args) {
+        if (args == null) {
+            return null;
+        }
+        for (int index = 0; index < args.length; index++) {
+            if ("--log-level".equals(args[index])) {
+                if (index + 1 >= args.length) {
+                    return "";
+                }
+                return args[index + 1];
+            }
+        }
+        return null;
+    }
+
+    private static String[] withoutLevel(String[] args) {
+        if (args == null) {
+            return new String[0];
+        }
+        List<String> remaining = new ArrayList<>();
+        for (int index = 0; index < args.length; index++) {
+            if ("--log-level".equals(args[index])) {
+                if (index + 1 < args.length) {
+                    index++;
+                }
+                continue;
+            }
+            remaining.add(args[index]);
+        }
+        return remaining.toArray(String[]::new);
+    }
+
     private static boolean isHelp(String[] args) {
-        return args != null && args.length == 1 && ("--help".equals(args[0]) || "-h".equals(args[0]));
+        return args.length == 1 && ("--help".equals(args[0]) || "-h".equals(args[0]));
     }
 
     private static String version(Class<?> owner) {
@@ -35,6 +76,6 @@ public final class Help {
     }
 
     private static String usage(String artifact) {
-        return "Usage: " + artifact + " --help | -h";
+        return "Usage: " + artifact + " --help | -h | --log-level LEVEL";
     }
 }

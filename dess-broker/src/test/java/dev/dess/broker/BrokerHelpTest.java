@@ -1,6 +1,7 @@
 package dev.dess.broker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -16,12 +17,12 @@ class BrokerHelpTest {
         Result help = run("--help");
         assertEquals(0, help.exitCode());
         assertEquals("", help.stderr());
-        assertEquals(expectedHelp("dess-broker"), help.stdout());
+        assertHelp(help.stdout(), "dess-broker");
 
         Result shortHelp = run("-h");
         assertEquals(0, shortHelp.exitCode());
         assertEquals("", shortHelp.stderr());
-        assertEquals(help.stdout(), shortHelp.stdout());
+        assertHelp(shortHelp.stdout(), "dess-broker");
     }
 
     @Test
@@ -29,20 +30,32 @@ class BrokerHelpTest {
         Result unknown = run("--bogus");
         assertEquals(2, unknown.exitCode());
         assertEquals("", unknown.stdout());
-        assertEquals(expectedUsage("dess-broker"), unknown.stderr());
+        assertUsage(unknown.stderr(), "dess-broker");
 
         Result none = run();
         assertEquals(2, none.exitCode());
         assertEquals("", none.stdout());
-        assertEquals(expectedUsage("dess-broker"), none.stderr());
+        assertUsage(none.stderr(), "dess-broker");
     }
 
-    private static String expectedHelp(String artifact) {
-        return artifact + System.lineSeparator() + "dev" + System.lineSeparator() + "Usage: " + artifact + " --help | -h" + System.lineSeparator();
+    private static void assertHelp(String stdout, String artifact) {
+        String[] lines = stdout.split("\\R", -1);
+        assertEquals(4, lines.length);
+        assertEquals("", lines[3]);
+        assertMessage(lines[0], "INFO", artifact);
+        assertMessage(lines[1], "INFO", "dev");
+        assertMessage(lines[2], "INFO", "Usage: " + artifact + " --help | -h | --log-level LEVEL");
     }
 
-    private static String expectedUsage(String artifact) {
-        return "Usage: " + artifact + " --help | -h" + System.lineSeparator();
+    private static void assertUsage(String stderr, String artifact) {
+        String[] lines = stderr.split("\\R", -1);
+        assertEquals(2, lines.length);
+        assertEquals("", lines[1]);
+        assertMessage(lines[0], "INFO", "Usage: " + artifact + " --help | -h | --log-level LEVEL");
+    }
+
+    private static void assertMessage(String line, String level, String message) {
+        assertTrue(line.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}[+-]\\d{2}:\\d{2} " + level + " \\S+ \\S+ \\Q" + message + "\\E"));
     }
 
     private static Result run(String... args) throws IOException, InterruptedException {
