@@ -11,6 +11,10 @@ public final class Help {
     }
 
     public static int execute(String artifact, Class<?> owner, String[] args, PrintStream out, PrintStream err) {
+        return execute(artifact, owner, args, out, err, usage(artifact));
+    }
+
+    public static int execute(String artifact, Class<?> owner, String[] args, PrintStream out, PrintStream err, String usage) {
         String requested = requestedLevel(args);
         if (requested == null) {
             requested = System.getProperty("dess.log.level", "INFO");
@@ -20,10 +24,10 @@ public final class Help {
         if (isHelp(withoutLevel(args))) {
             out.println(Logging.format(Logging.level(), component, artifact));
             out.println(Logging.format(Logging.level(), component, version(owner)));
-            out.println(Logging.format(Logging.level(), component, usage(artifact)));
+            out.println(Logging.format(Logging.level(), component, usage));
             return 0;
         }
-        err.println(Logging.format("INFO", component, usage(artifact)));
+        err.println(Logging.format("INFO", component, usage));
         return 2;
     }
 
