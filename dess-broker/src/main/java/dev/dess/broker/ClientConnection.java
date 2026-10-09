@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Semaphore;
 
 public final class ClientConnection implements Runnable {
 
@@ -38,6 +39,7 @@ public final class ClientConnection implements Runnable {
     private final BrokerConfig config;
     private final TopicRegistry registry;
     private final Broker broker;
+    private final Semaphore permits;
     private final String remoteAddress;
     private final Instant acceptedAt;
     private final Object outputLock = new Object();
@@ -60,7 +62,7 @@ public final class ClientConnection implements Runnable {
         }
     }
 
-    ClientConnection(long id, Socket socket, BrokerConfig config, TopicRegistry registry, Broker broker) throws IOException {
+    ClientConnection(long id, Socket socket, BrokerConfig config, TopicRegistry registry, Broker broker, Semaphore permits) throws IOException {
         this.id = id;
         this.socket = socket;
         this.input = socket.getInputStream();
@@ -68,6 +70,7 @@ public final class ClientConnection implements Runnable {
         this.config = config;
         this.registry = registry;
         this.broker = broker;
+        this.permits = permits;
         this.remoteAddress = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
         this.acceptedAt = Instant.now();
         socket.setTcpNoDelay(true);
@@ -135,6 +138,7 @@ public final class ClientConnection implements Runnable {
             }
             cleaned = true;
             state = State.CLOSING;
+            permits.release();
         }
         for (String name : names()) {
             registry.remove(this, name, "DISCONNECT");
@@ -295,6 +299,14 @@ public final class ClientConnection implements Runnable {
     }
 
     private void closeSocket() {
+        if (socket.isClosed()) {
+            return;
+        }
+        try {
+            socket.shutdownOutput();
+        } catch (IOException ex) {
+            // The peer may already be gone.
+        }
         try {
             socket.close();
         } catch (IOException ex) {
