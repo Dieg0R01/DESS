@@ -18,7 +18,11 @@ public final class BrokerHarness implements AutoCloseable {
     }
 
     public static BrokerHarness start() {
-        Broker broker = open();
+        return start(new BrokerConfig(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
+    }
+
+    public static BrokerHarness start(BrokerConfig config) {
+        Broker broker = open(config);
         long deadline = System.nanoTime() + START_TIMEOUT.toNanos();
         while (System.nanoTime() < deadline) {
             try (Socket probe = new Socket()) {
@@ -41,9 +45,9 @@ public final class BrokerHarness implements AutoCloseable {
         broker.close();
     }
 
-    private static Broker open() {
+    private static Broker open(BrokerConfig config) {
         try {
-            return Broker.start(new BrokerConfig(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
+            return Broker.start(config);
         } catch (IOException ex) {
             throw new UncheckedIOException("Could not bind the test broker", ex);
         }

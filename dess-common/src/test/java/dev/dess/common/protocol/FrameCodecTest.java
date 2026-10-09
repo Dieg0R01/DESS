@@ -2,11 +2,15 @@ package dev.dess.common.protocol;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
@@ -64,6 +68,33 @@ class FrameCodecTest {
         assertEquals(ErrorCode.MALFORMED_FRAME, truncated.code());
     }
 
+    @Test
+    void oversizePayloadIsDiscardedInChunksAndTheNextFrameRemains() throws Exception {
+        byte[] header = FrameCodec.topicHeader("sales");
+        byte[] payload = new byte[20_000];
+        byte[] ping = FrameCodec.encode(new Frame(Command.PING, new byte[0], new byte[0]));
+        byte[] encoded = rawFrame(7 + header.length + payload.length, Command.PUBLISH.code(), header, payload.length, payload);
+        byte[] both = new byte[encoded.length + ping.length];
+        System.arraycopy(encoded, 0, both, 0, encoded.length);
+        System.arraycopy(ping, 0, both, encoded.length, ping.length);
+        InputStream input = new ChunkLimitStream(both);
+        FrameException ex = assertThrows(FrameException.class, () -> FrameCodec.read(input, 4));
+        assertEquals(ErrorCode.PAYLOAD_TOO_LARGE, ex.code());
+        assertFalse(ex.fatal());
+        assertEquals("sales", ex.topic());
+        Frame next = FrameCodec.read(input, 4);
+        assertEquals(Command.PING, next.command());
+    }
+
+    @Test
+    void frameAboveTheCeilingIsRejectedWithoutTheBody() throws Exception {
+        ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        new DataOutputStream(raw).writeInt(FrameCodec.MAX_FRAME_LENGTH + 1);
+        FrameException ex = assertThrows(FrameException.class, () -> FrameCodec.read(new ByteArrayInputStream(raw.toByteArray())));
+        assertEquals(ErrorCode.PAYLOAD_TOO_LARGE, ex.code());
+        assertTrue(ex.fatal());
+    }
+
     private static byte[] headerFor(Command command) {
         return switch (command) {
             case HELLO -> FrameCodec.helloHeader(1);
@@ -91,5 +122,38 @@ class FrameCodecTest {
         out.writeInt(payloadLength);
         out.write(payload);
         return buffer.toByteArray();
+    }
+
+    private static final class ChunkLimitStream extends InputStream {
+
+        private final byte[] data;
+
+        private int offset;
+
+        private ChunkLimitStream(byte[] data) {
+            this.data = data;
+        }
+
+        @Override
+        public int read() {
+            if (offset >= data.length) {
+                return -1;
+            }
+            return data[offset++] & 0xff;
+        }
+
+        @Override
+        public int read(byte[] destination, int off, int length) {
+            if (length > 8192) {
+                throw new IllegalArgumentException("read of " + length + " exceeds 8192");
+            }
+            if (offset >= data.length) {
+                return -1;
+            }
+            int count = Math.min(length, data.length - offset);
+            System.arraycopy(data, offset, destination, off, count);
+            offset += count;
+            return count;
+        }
     }
 }

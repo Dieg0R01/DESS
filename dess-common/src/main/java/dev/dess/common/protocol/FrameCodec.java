@@ -21,6 +21,8 @@ public final class FrameCodec {
 
     public static final int PROTOCOL_VERSION = 1;
 
+    private static final int DISCARD_CHUNK = 8192;
+
     private FrameCodec() {
     }
 
@@ -69,6 +71,10 @@ public final class FrameCodec {
     }
 
     public static Frame read(InputStream input) throws IOException {
+        return read(input, MAX_FRAME_LENGTH);
+    }
+
+    public static Frame read(InputStream input, int maxPayloadBytes) throws IOException {
         int first = input.read();
         if (first < 0) {
             throw new EOFException("end of stream");
@@ -76,19 +82,34 @@ public final class FrameCodec {
         byte[] prefix = new byte[4];
         prefix[0] = (byte) first;
         readFully(input, prefix, 1, 3);
-        int frameLength = readInt(prefix, 0);
-        if (frameLength > MAX_FRAME_LENGTH) {
+        long declared = readInt(prefix, 0) & 0xffffffffL;
+        if (declared > MAX_FRAME_LENGTH) {
             throw new FrameException(ErrorCode.PAYLOAD_TOO_LARGE, "frame is longer than the ceiling");
         }
-        if (frameLength < 7) {
+        if (declared < 7) {
             throw new FrameException(ErrorCode.MALFORMED_FRAME, "frame is too short");
         }
-        byte[] body = new byte[frameLength];
-        readFully(input, body, 0, frameLength);
-        byte[] encoded = new byte[4 + frameLength];
-        System.arraycopy(prefix, 0, encoded, 0, 4);
-        System.arraycopy(body, 0, encoded, 4, frameLength);
-        return decode(encoded);
+        int command = readByte(input);
+        int headerLength = readUnsignedShort(input);
+        if (headerLength > MAX_HEADER_LENGTH) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "header is longer than 1024 bytes");
+        }
+        if (3L + headerLength + 4 > declared) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "frame is truncated");
+        }
+        byte[] header = new byte[headerLength];
+        readFully(input, header, 0, headerLength);
+        int payloadLength = readStreamInt(input);
+        if (payloadLength < 0 || 7L + headerLength + payloadLength != declared) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "frame length does not match");
+        }
+        if (payloadLength > maxPayloadBytes) {
+            discard(input, payloadLength);
+            throw new FrameException(ErrorCode.PAYLOAD_TOO_LARGE, "payload is too large", false, topicOrNull(header));
+        }
+        byte[] payload = new byte[payloadLength];
+        readFully(input, payload, 0, payloadLength);
+        return new Frame(Command.fromCode(command), header, payload);
     }
 
     public static byte[] helloHeader(int version) {
@@ -200,6 +221,42 @@ public final class FrameCodec {
                 | ((bytes[offset + 1] & 0xff) << 16)
                 | ((bytes[offset + 2] & 0xff) << 8)
                 | (bytes[offset + 3] & 0xff);
+    }
+
+    private static void discard(InputStream input, int length) throws IOException {
+        byte[] chunk = new byte[DISCARD_CHUNK];
+        int remaining = length;
+        while (remaining > 0) {
+            int count = input.read(chunk, 0, Math.min(chunk.length, remaining));
+            if (count < 0) {
+                throw new FrameException(ErrorCode.MALFORMED_FRAME, "frame is truncated");
+            }
+            remaining -= count;
+        }
+    }
+
+    private static String topicOrNull(byte[] header) {
+        try {
+            return topic(header);
+        } catch (FrameException ex) {
+            return null;
+        }
+    }
+
+    private static int readByte(InputStream input) throws IOException {
+        int value = input.read();
+        if (value < 0) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "frame is truncated");
+        }
+        return value;
+    }
+
+    private static int readUnsignedShort(InputStream input) throws IOException {
+        return (readByte(input) << 8) | readByte(input);
+    }
+
+    private static int readStreamInt(InputStream input) throws IOException {
+        return (readByte(input) << 24) | (readByte(input) << 16) | (readByte(input) << 8) | readByte(input);
     }
 
     private static void readFully(InputStream input, byte[] dest, int offset, int length) throws IOException {

@@ -91,13 +91,19 @@ public final class ClientConnection implements Runnable {
             socket.setSoTimeout(config.idleTimeoutMillis());
             while (state != State.CLOSING) {
                 try {
-                    handle(FrameCodec.read(input));
+                    handle(FrameCodec.read(input, config.maxPayloadBytes()));
                 } catch (FrameException ex) {
-                    if (ex.code() == ErrorCode.UNKNOWN_COMMAND) {
-                        writeError(ex.code(), "unknown command");
-                    } else {
+                    if (!ex.fatal() && ex.code() == ErrorCode.PAYLOAD_TOO_LARGE) {
+                        Map<String, String> properties = new LinkedHashMap<>();
+                        String topic = ex.topic();
+                        properties.put("topic", topic == null || topic.length() > 64 ? "-" : topic);
+                        properties.put("errorCode", ex.code().name());
+                        properties.put("clientId", Long.toString(id));
+                        Logging.event("dev.dess.broker", "message.rejected", properties);
+                    }
+                    writeError(ex.code(), ex.getMessage());
+                    if (ex.fatal()) {
                         closeReason = "ERROR";
-                        writeError(ex.code(), ex.getMessage());
                         state = State.CLOSING;
                     }
                 }
@@ -155,8 +161,13 @@ public final class ClientConnection implements Runnable {
                 // Removed when subscription changes are implemented.
             }
             case PING -> writeFrame(new Frame(Command.PONG, new byte[0], new byte[0]));
-            case ACK, PONG, ERROR, DELIVER -> {
-                // Client acknowledgements are ignored until confirmation modes exist.
+            case ACK -> {
+                if (frame.header().length != 0 || frame.payload().length != 0) {
+                    fail(ErrorCode.MALFORMED_FRAME, "malformed ack");
+                }
+            }
+            case PONG, ERROR, DELIVER -> {
+                // Server-originated frames from a client are ignored until confirmation modes exist.
             }
             default -> {
                 Command unexpected = frame.command();

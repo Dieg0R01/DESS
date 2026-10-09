@@ -70,6 +70,11 @@ public final class ProtocolClient implements AutoCloseable {
         return FrameCodec.read(input);
     }
 
+    public void writeEncoded(byte[] encoded) throws IOException {
+        output.write(encoded);
+        output.flush();
+    }
+
     @Override
     public void close() throws IOException {
         socket.close();
