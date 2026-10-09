@@ -161,9 +161,7 @@ public final class ClientConnection implements Runnable {
             case HELLO -> hello(frame);
             case SUBSCRIBE -> subscribe(frame);
             case PUBLISH -> publish(frame);
-            case UNSUBSCRIBE -> {
-                // Removed when subscription changes are implemented.
-            }
+            case UNSUBSCRIBE -> unsubscribe(frame);
             case PING -> writeFrame(new Frame(Command.PONG, new byte[0], new byte[0]));
             case ACK -> {
                 if (frame.header().length != 0 || frame.payload().length != 0) {
@@ -217,6 +215,21 @@ public final class ClientConnection implements Runnable {
         registry.subscribe(this, topic);
         synchronized (subscriptionNames) {
             subscriptionNames.add(topic);
+        }
+    }
+
+    private void unsubscribe(Frame frame) throws IOException {
+        String topic = topic(frame);
+        if (topic == null) {
+            return;
+        }
+        if (!TopicName.isValid(topic)) {
+            reject(topic, ErrorCode.INVALID_TOPIC_NAME, "invalid topic name");
+            return;
+        }
+        registry.remove(this, topic, "UNSUBSCRIBE");
+        synchronized (subscriptionNames) {
+            subscriptionNames.remove(topic);
         }
     }
 
