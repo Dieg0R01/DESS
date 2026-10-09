@@ -59,11 +59,15 @@ public final class Logging {
     }
 
     public static void event(String name, Map<String, String> properties) {
+        event("dev.dess.common.logging", name, properties);
+    }
+
+    public static void event(String component, String name, Map<String, String> properties) {
         StringBuilder message = new StringBuilder("event=").append(name);
         for (Map.Entry<String, String> property : properties.entrySet()) {
             message.append(' ').append(property.getKey()).append('=').append(quote(property.getValue()));
         }
-        log(LogLevel.INFO, "dev.dess.common.logging", message.toString());
+        log(LogLevel.INFO, component, message.toString());
     }
 
     static String line(LogLevel level, String component, String message, long epochMillis) {

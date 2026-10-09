@@ -25,6 +25,9 @@ class LogFormatTest {
         String event = capture(() -> Logging.event("broker.started", properties));
         assertLine(event, "INFO", "dev.dess.common.logging", "event=broker.started version=0.1.0 tcpPort=55123");
 
+        String named = capture(() -> Logging.event("dev.dess.broker", "broker.started", properties));
+        assertLine(named, "INFO", "dev.dess.broker", "event=broker.started version=0.1.0 tcpPort=55123");
+
         Map<String, String> quoted = new LinkedHashMap<>();
         quoted.put("note", "disk full");
         quoted.put("detail", "say \"hi\"");
