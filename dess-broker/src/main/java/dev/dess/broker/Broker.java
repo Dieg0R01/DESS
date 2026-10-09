@@ -1,5 +1,6 @@
 package dev.dess.broker;
 
+import dev.dess.common.logging.Logging;
 import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.ErrorCode;
 import dev.dess.common.protocol.Frame;
@@ -7,7 +8,9 @@ import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,6 +28,7 @@ public final class Broker implements AutoCloseable {
     private final TopicRegistry registry = new TopicRegistry();
     private final ConcurrentHashMap<Long, ClientConnection> connections = new ConcurrentHashMap<>();
     private final Semaphore permits;
+    private final long startedAt;
     private final AtomicLong ids = new AtomicLong();
     private volatile boolean running = true;
     private volatile boolean shuttingDown;
@@ -32,7 +36,8 @@ public final class Broker implements AutoCloseable {
     private Broker(BrokerConfig config) throws IOException {
         this.config = config;
         this.permits = new Semaphore(config.maxConnections());
-        this.serverSocket = new ServerSocket(config.port());
+        this.serverSocket = bind(config.port());
+        this.startedAt = System.nanoTime();
         this.executor = Executors.newFixedThreadPool(config.maxConnections(), runnable -> {
             Thread thread = new Thread(runnable);
             thread.setDaemon(false);
@@ -40,7 +45,19 @@ public final class Broker implements AutoCloseable {
         });
         this.acceptThread = new Thread(this::acceptLoop, "dess-accept-" + serverSocket.getLocalPort());
         this.acceptThread.setDaemon(false);
+        Map<String, String> started = new LinkedHashMap<>();
+        started.put("version", Integer.toString(FrameCodec.PROTOCOL_VERSION));
+        started.put("tcpPort", Integer.toString(serverSocket.getLocalPort()));
+        Logging.event("dev.dess.broker", "broker.started", started);
         this.acceptThread.start();
+    }
+
+    private static ServerSocket bind(int port) throws IOException {
+        try {
+            return new ServerSocket(port);
+        } catch (IOException ex) {
+            throw new IOException("Could not bind port " + port, ex);
+        }
     }
 
     public static Broker start(BrokerConfig config) throws IOException {
@@ -64,6 +81,10 @@ public final class Broker implements AutoCloseable {
 
     @Override
     public void close() {
+        close("CLOSE");
+    }
+
+    public void close(String reason) {
         synchronized (this) {
             if (!running) {
                 return;
@@ -96,6 +117,16 @@ public final class Broker implements AutoCloseable {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while stopping the broker", ex);
+        }
+        long uptimeSeconds = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startedAt);
+        Map<String, String> stopped = new LinkedHashMap<>();
+        stopped.put("uptimeSeconds", Long.toString(uptimeSeconds));
+        stopped.put("reason", reason);
+        Logging.event("dev.dess.broker", "broker.stopped", stopped);
+        if ("SIGNAL".equals(reason)) {
+            // Signal shutdown closes the log handlers, so this line is written directly.
+            System.out.println(Logging.format("INFO", "dev.dess.broker", "event=broker.stopped uptimeSeconds=" + uptimeSeconds + " reason=" + reason));
+            System.out.flush();
         }
     }
 

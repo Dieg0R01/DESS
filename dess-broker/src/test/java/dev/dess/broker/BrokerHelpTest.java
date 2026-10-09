@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class BrokerHelpTest {
@@ -23,6 +24,11 @@ class BrokerHelpTest {
         assertEquals(0, shortHelp.exitCode());
         assertEquals("", shortHelp.stderr());
         assertHelp(shortHelp.stdout(), "dess-broker");
+
+        Result helped = run("--port", "1", "--help");
+        assertEquals(0, helped.exitCode());
+        assertEquals("", helped.stderr());
+        assertHelp(helped.stdout(), "dess-broker");
     }
 
     @Test
@@ -32,10 +38,10 @@ class BrokerHelpTest {
         assertEquals("", unknown.stdout());
         assertUsage(unknown.stderr(), "dess-broker");
 
-        Result none = run();
-        assertEquals(2, none.exitCode());
-        assertEquals("", none.stdout());
-        assertUsage(none.stderr(), "dess-broker");
+        Result missing = run("--port");
+        assertEquals(2, missing.exitCode());
+        assertEquals("", missing.stdout());
+        assertUsage(missing.stderr(), "dess-broker");
     }
 
     private static void assertHelp(String stdout, String artifact) {
@@ -44,14 +50,14 @@ class BrokerHelpTest {
         assertEquals("", lines[3]);
         assertMessage(lines[0], "INFO", artifact);
         assertMessage(lines[1], "INFO", "dev");
-        assertMessage(lines[2], "INFO", "Usage: " + artifact + " --help | -h | --log-level LEVEL");
+        assertMessage(lines[2], "INFO", "Usage: " + artifact + " [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--log-level LEVEL]");
     }
 
     private static void assertUsage(String stderr, String artifact) {
         String[] lines = stderr.split("\\R", -1);
         assertEquals(2, lines.length);
         assertEquals("", lines[1]);
-        assertMessage(lines[0], "INFO", "Usage: " + artifact + " --help | -h | --log-level LEVEL");
+        assertMessage(lines[0], "INFO", "Usage: " + artifact + " [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--log-level LEVEL]");
     }
 
     private static void assertMessage(String line, String level, String message) {
@@ -69,8 +75,13 @@ class BrokerHelpTest {
         Path err = Files.createTempFile("dess-broker-err", ".txt");
         try {
             Process process = new ProcessBuilder(command).redirectOutput(out.toFile()).redirectError(err.toFile()).start();
-            int code = process.waitFor();
-            return new Result(code, Files.readString(out), Files.readString(err));
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                    throw new AssertionError("broker process did not exit");
+                }
+            }
+            return new Result(process.exitValue(), Files.readString(out), Files.readString(err));
         } finally {
             Files.deleteIfExists(out);
             Files.deleteIfExists(err);
