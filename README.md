@@ -8,7 +8,7 @@ DESS is a small event streaming platform inspired by the architecture of systems
 
 The goal is not to compete with production brokers, but to implement by hand — on top of the JDK — the building blocks that a distributed system relies on: networking over TCP and UDP, multithreading and synchronization, durable storage, XML configuration, TLS encryption, message integrity and a web management interface.
 
-> **Status:** design stage. No code has been written yet. This document describes the target architecture.
+> **Status:** protocol version 1 is implemented: a plain-TCP broker with `produce` and `consume`. TLS, UDP discovery, XML configuration and the admin API remain the target architecture.
 
 ---
 
@@ -160,20 +160,38 @@ sequenceDiagram
 
 ## Wire protocol
 
-Clients and broker talk through a small, versioned protocol over TCP. Every frame carries a command, its fields and, when present, a payload whose length is declared explicitly, so payloads are opaque bytes that never need escaping.
+Protocol version 1 is a binary framing on plain TCP. Integers are big-endian and there is no padding. One frame is one record:
 
-| Command | Direction | Fields | Description |
-|---------|-----------|--------|-------------|
-| `HELLO` | both | protocol version | Opens every connection; incompatible versions are rejected. |
-| `SUBSCRIBE` | client → broker | topic, start position | Register as a subscriber of a topic, from the latest, the earliest or a given offset. |
-| `UNSUBSCRIBE` | client → broker | topic | Stop receiving messages from a topic. |
-| `PUBLISH` | client → broker | topic, confirmation mode, SHA-256 digest, payload | Publish a message; the digest is verified by the broker. |
-| `DELIVER` | broker → client | topic, offset, digest, payload | A message pushed to a subscriber. |
-| `ACK` | both | topic, offset | Confirms acceptance (broker → producer) or processing (consumer → broker). |
-| `PING` / `PONG` | both | — | Heartbeat that keeps idle connections alive. |
-| `ERROR` | broker → client | code, reason | Rejected request, with a stable error code. |
+```text
+uint32 frameLength
+uint8  command
+uint16 headerLength
+byte   header[headerLength]
+uint32 payloadLength
+byte   payload[payloadLength]
+```
 
-Discovery uses a separate UDP exchange: a client broadcasts a `DISCOVER` datagram and the broker replies with its address, port, protocol version and whether TLS is required. The exact byte layout of each frame is documented together with its implementation.
+`frameLength` counts every byte after itself and equals `7 + headerLength + payloadLength`. The header is at most 1024 bytes. The payload is at most the configured maximum, 1048576 bytes by default, and is opaque: every byte is kept. A frame longer than 16 MiB + 1031 bytes is rejected.
+
+Version 1 carries only the fields below. It has no offset, digest, confirmation mode or start position.
+
+| Code | Command | Direction | Header | Payload |
+|------|---------|-----------|--------|---------|
+| 1 | `HELLO` | both | `uint16` version, only version 1 | empty |
+| 2 | `PUBLISH` | client → broker | topic | message bytes |
+| 3 | `SUBSCRIBE` | client → broker | topic | empty |
+| 4 | `UNSUBSCRIBE` | client → broker | topic | empty |
+| 5 | `DELIVER` | broker → client | topic | the same message bytes |
+| 6 | `ACK` | both | empty from the client; topic from the broker | empty |
+| 7 | `PING` | client → broker | empty | empty |
+| 8 | `PONG` | broker → client | empty | empty |
+| 9 | `ERROR` | broker → client | error code and reason | empty |
+
+A topic header is a `uint16` length followed by that many UTF-8 bytes. The name matches `[a-z0-9][a-z0-9._-]{0,63}`. An error header is a `uint16` code length, the ASCII code, a `uint16` reason length and the UTF-8 reason.
+
+The client's first frame is `HELLO` version 1. The broker answers with `HELLO` version 1. `SUBSCRIBE` and `UNSUBSCRIBE` have no reply on success. Each accepted `PUBLISH` is answered with one `ACK`; a rejection is one `ERROR`. The client sends `PING` and the broker answers `PONG`.
+
+UDP discovery and TLS are part of the target architecture. They are not part of version 1.
 
 ---
 
@@ -271,8 +289,6 @@ Tentative shape:
 
 ## Getting started
 
-> 🚧 **Placeholder.** This section will be filled in as the implementation lands.
-
 ### Prerequisites
 
 - JDK 21+
@@ -287,25 +303,39 @@ mvn clean verify
 ### Run the broker
 
 ```bash
-# TODO
-java -jar dess-broker/target/dess-broker.jar --config config/config.xml
+java -jar dess-broker/target/dess-broker.jar --port 55123
 ```
+
+```text
+Usage: dess-broker [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--log-level LEVEL]
+```
+
+The defaults are port `55123`, 128 connections, 1048576-byte payloads and a 30000 ms idle timeout. Port `0` lets the operating system choose. `--help` and `-h` print the name, version and usage, then exit 0.
 
 ### Run a consumer and a producer
 
 ```bash
-# TODO
 java -jar dess-client/target/dess-client.jar consume --topic sales
-java -jar dess-client/target/dess-client.jar produce --topic sales --message "hello"
+java -jar dess-client/target/dess-client.jar produce --topic sales --message hello
 ```
 
+```text
+Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]
+```
+
+`consume` may repeat `--topic`. `produce` takes one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. The consumer prints the topic, one space, the payload and a newline. `--host` defaults to `127.0.0.1` and `--port` to `55123`.
+
 ### Generate TLS certificates
+
+TLS is part of the target architecture and is not active in protocol version 1.
 
 ```bash
 # TODO: keytool scripts under config/
 ```
 
 ### Query the admin API
+
+The admin API is part of the target architecture and is not served yet.
 
 ```bash
 # TODO
