@@ -23,7 +23,8 @@ class BrokerHarnessTest {
     @AfterEach
     void noAcceptThreadRemains() {
         boolean alive = Thread.getAllStackTraces().keySet().stream()
-                .anyMatch(thread -> thread.isAlive() && thread.getName().startsWith("dess-accept-"));
+                .anyMatch(thread -> thread.isAlive()
+                        && (thread.getName().startsWith("dess-accept-") || thread.getName().startsWith("dess-client-")));
         assertFalse(alive);
     }
 

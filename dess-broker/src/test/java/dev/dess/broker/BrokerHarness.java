@@ -11,14 +11,14 @@ public final class BrokerHarness implements AutoCloseable {
 
     private static final Duration START_TIMEOUT = Duration.ofSeconds(2);
 
-    private final StubBroker broker;
+    private final Broker broker;
 
-    private BrokerHarness(StubBroker broker) {
+    private BrokerHarness(Broker broker) {
         this.broker = broker;
     }
 
     public static BrokerHarness start() {
-        StubBroker broker = open();
+        Broker broker = open();
         long deadline = System.nanoTime() + START_TIMEOUT.toNanos();
         while (System.nanoTime() < deadline) {
             try (Socket probe = new Socket()) {
@@ -41,9 +41,9 @@ public final class BrokerHarness implements AutoCloseable {
         broker.close();
     }
 
-    private static StubBroker open() {
+    private static Broker open() {
         try {
-            return new StubBroker();
+            return Broker.start(new BrokerConfig(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
         } catch (IOException ex) {
             throw new UncheckedIOException("Could not bind the test broker", ex);
         }

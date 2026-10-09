@@ -24,8 +24,18 @@ public final class ProtocolClient implements AutoCloseable {
 
     public static ProtocolClient connect(int port) throws IOException {
         Socket socket = new Socket();
+        socket.setTcpNoDelay(true);
         socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 2000);
         return new ProtocolClient(socket);
+    }
+
+    public void shrinkReceiveBuffer(int bytes) throws IOException {
+        socket.setReceiveBufferSize(bytes);
+    }
+
+    public void abort() throws IOException {
+        socket.setSoLinger(true, 0);
+        socket.close();
     }
 
     public void hello() throws IOException {
@@ -50,6 +60,10 @@ public final class ProtocolClient implements AutoCloseable {
 
     public void ping() throws IOException {
         write(Command.PING, new byte[0], new byte[0]);
+    }
+
+    public void setReadTimeoutMillis(int millis) throws IOException {
+        socket.setSoTimeout(millis);
     }
 
     public Frame readFrame() throws IOException {
