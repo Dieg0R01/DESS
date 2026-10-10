@@ -19,11 +19,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -59,7 +54,8 @@ class ConnectionIsolationTest {
 
     @Test
     void partialFrameDoesNotBlockAnotherPublish() throws Exception {
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 Socket stuck = new Socket()) {
             stuck.setTcpNoDelay(true);
             stuck.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), harness.port()), 2_000);
@@ -72,7 +68,7 @@ class ConnectionIsolationTest {
                 producer.hello();
                 consumer.hello();
                 consumer.subscribe("sales");
-                awaitSubscribed(producer, consumer, "sales");
+                logs.awaitAdded(consumer, "sales");
                 byte[] payload = "kept".getBytes(StandardCharsets.UTF_8);
                 producer.publish("sales", payload);
                 Frame ack = producer.readFrame();
@@ -90,14 +86,11 @@ class ConnectionIsolationTest {
         List<ProtocolClient> open = new ArrayList<>();
         try (BrokerHarness harness = BrokerHarness.start(new BrokerConfig(0, limit, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000))) {
             try {
-                long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-                while (open.size() < limit && System.nanoTime() < deadline) {
+                for (int index = 0; index < limit; index++) {
                     ProtocolClient client = occupy(harness.port());
-                    if (client != null) {
-                        open.add(client);
-                    }
+                    assertTrue(client != null, "connection " + index + " was not accepted");
+                    open.add(client);
                 }
-                assertEquals(limit, open.size());
                 try (ProtocolClient extra = ProtocolClient.connect(harness.port())) {
                     extra.setReadTimeoutMillis(2_000);
                     Frame error = extra.readFrame();
@@ -113,11 +106,8 @@ class ConnectionIsolationTest {
 
     @Test
     void closingASubscriberDropsItBeforeTheNextPublish() throws Exception {
-        List<String> lines = new CopyOnWriteArrayList<>();
-        Logger logger = Logger.getLogger("dev.dess.broker");
-        Handler handler = capture(lines);
-        logger.addHandler(handler);
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient producer = ProtocolClient.connect(harness.port());
                 ProtocolClient staying = ProtocolClient.connect(harness.port());
                 ProtocolClient leaving = ProtocolClient.connect(harness.port())) {
@@ -129,9 +119,9 @@ class ConnectionIsolationTest {
             leaving.hello();
             staying.subscribe("sales");
             leaving.subscribe("sales");
-            awaitSubscribed(producer, List.of(staying, leaving), "sales");
+            awaitSubscribed(logs, List.of(staying, leaving), "sales");
             leaving.close();
-            assertTrue(waitFor(lines, "event=subscription.removed", "reason=DISCONNECT"));
+            assertTrue(logs.await(Duration.ofSeconds(2), "event=subscription.removed", "reason=DISCONNECT"), () -> logs.lines().toString());
             byte[] payload = "after".getBytes(StandardCharsets.UTF_8);
             producer.publish("sales", payload);
             assertEquals(Command.ACK, producer.readFrame().command());
@@ -139,8 +129,6 @@ class ConnectionIsolationTest {
             assertArrayEquals(payload, delivered.payload());
             staying.setReadTimeoutMillis(200);
             assertThrows(SocketTimeoutException.class, staying::readFrame);
-        } finally {
-            logger.removeHandler(handler);
         }
     }
 
@@ -169,74 +157,10 @@ class ConnectionIsolationTest {
         assertTrue(ex instanceof EOFException || ex instanceof SocketException, ex.toString());
     }
 
-    private static void awaitSubscribed(ProtocolClient producer, ProtocolClient consumer, String topic) throws Exception {
-        awaitSubscribed(producer, List.of(consumer), topic);
-    }
-
-    private static void awaitSubscribed(ProtocolClient producer, List<ProtocolClient> consumers, String topic) throws Exception {
-        byte[] ready = ("ready-" + topic).getBytes(StandardCharsets.UTF_8);
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (System.nanoTime() < deadline) {
-            producer.publish(topic, ready);
-            assertEquals(Command.ACK, producer.readFrame().command());
-            int seen = 0;
-            for (ProtocolClient consumer : consumers) {
-                consumer.setReadTimeoutMillis(200);
-                try {
-                    Frame delivered = consumer.readFrame();
-                    if (new String(delivered.payload(), StandardCharsets.UTF_8).startsWith("ready-")) {
-                        seen++;
-                    }
-                } catch (SocketTimeoutException ex) {
-                    // This subscriber has not registered yet.
-                }
-                consumer.setReadTimeoutMillis(2_000);
-            }
-            if (seen == consumers.size()) {
-                return;
-            }
+    private static void awaitSubscribed(LogCapture logs, List<ProtocolClient> consumers, String topic) throws Exception {
+        for (ProtocolClient consumer : consumers) {
+            logs.awaitAdded(consumer, topic);
         }
-        throw new AssertionError("subscribers did not become active");
-    }
-
-    private static boolean waitFor(List<String> lines, String... parts) {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (System.nanoTime() < deadline) {
-            if (lines.stream().anyMatch(line -> containsAll(line, parts))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean containsAll(String line, String... parts) {
-        for (String part : parts) {
-            if (!line.contains(part)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static Handler capture(List<String> lines) {
-        Handler handler = new Handler() {
-            @Override
-            public void publish(LogRecord record) {
-                if (record.getMessage() != null) {
-                    lines.add(record.getMessage());
-                }
-            }
-
-            @Override
-            public void flush() {
-            }
-
-            @Override
-            public void close() {
-            }
-        };
-        handler.setLevel(Level.ALL);
-        return handler;
     }
 
     private static void closeAll(List<ProtocolClient> clients) throws IOException {

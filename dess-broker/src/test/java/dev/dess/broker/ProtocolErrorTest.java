@@ -13,9 +13,7 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.SocketException;
-import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -31,14 +29,15 @@ class ProtocolErrorTest {
         byte[] newline = "\n".getBytes(StandardCharsets.UTF_8);
         byte[] empty = new byte[0];
         byte[] cafe = "café".getBytes(StandardCharsets.UTF_8);
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient producer = ProtocolClient.connect(harness.port());
                 ProtocolClient consumer = ProtocolClient.connect(harness.port())) {
             arm(producer, consumer);
             producer.hello();
             consumer.hello();
             consumer.subscribe("sales");
-            awaitSubscribed(producer, consumer, "sales");
+            logs.awaitAdded(consumer, "sales");
             for (byte[] payload : new byte[][] {colon, newline, empty, cafe}) {
                 producer.publish("sales", payload);
                 Frame ack = producer.readFrame();
@@ -155,26 +154,6 @@ class ProtocolErrorTest {
         for (ProtocolClient client : clients) {
             client.setReadTimeoutMillis(5_000);
         }
-    }
-
-    private static void awaitSubscribed(ProtocolClient producer, ProtocolClient consumer, String topic) throws Exception {
-        byte[] ready = "ready".getBytes(StandardCharsets.UTF_8);
-        consumer.setReadTimeoutMillis(200);
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (System.nanoTime() < deadline) {
-            producer.publish(topic, ready);
-            assertEquals(Command.ACK, producer.readFrame().command());
-            try {
-                Frame delivered = consumer.readFrame();
-                assertEquals(Command.DELIVER, delivered.command());
-                assertArrayEquals(ready, delivered.payload());
-                consumer.setReadTimeoutMillis(5_000);
-                return;
-            } catch (SocketTimeoutException ex) {
-                // The subscribe frame has not been registered yet.
-            }
-        }
-        throw new AssertionError("subscriber did not become active");
     }
 
     private static void assertError(ProtocolClient client, String code) throws IOException {

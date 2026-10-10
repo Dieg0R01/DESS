@@ -23,8 +23,12 @@ final class CliProcess {
         if (input != null) {
             builder.redirectInput(input.toFile());
         }
-        builder.redirectOutput(output.toFile());
-        builder.redirectError(error.toFile());
+        if (output != null) {
+            builder.redirectOutput(output.toFile());
+        }
+        if (error != null) {
+            builder.redirectError(error.toFile());
+        }
         return builder.start();
     }
 

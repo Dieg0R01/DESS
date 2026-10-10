@@ -9,7 +9,6 @@ import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -21,7 +20,8 @@ class PublishSubscribeTest {
 
     @Test
     void subscriberReceivesOneHundredRoundsInOrder() throws Exception {
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient producer = ProtocolClient.connect(harness.port());
                 ProtocolClient consumer = ProtocolClient.connect(harness.port())) {
             producer.setReadTimeoutMillis(5_000);
@@ -29,7 +29,8 @@ class PublishSubscribeTest {
             producer.hello();
             consumer.hello();
             consumer.subscribe("sales");
-            awaitSubscribed(producer, consumer, "sales");
+            logs.awaitAdded(consumer, "sales");
+            logs.quiet();
 
             for (int round = 0; round < 100; round++) {
                 for (int index = 0; index < 1_000; index++) {
@@ -66,27 +67,6 @@ class PublishSubscribeTest {
             producer.setReadTimeoutMillis(200);
             assertThrows(SocketTimeoutException.class, producer::readFrame);
         }
-    }
-
-    private static void awaitSubscribed(ProtocolClient producer, ProtocolClient consumer, String topic) throws Exception {
-        byte[] ready = "ready".getBytes(StandardCharsets.UTF_8);
-        consumer.setReadTimeoutMillis(200);
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (System.nanoTime() < deadline) {
-            producer.publish(topic, ready);
-            Frame ack = producer.readFrame();
-            assertEquals(Command.ACK, ack.command());
-            try {
-                Frame delivered = consumer.readFrame();
-                assertEquals(Command.DELIVER, delivered.command());
-                assertArrayEquals(ready, delivered.payload());
-                consumer.setReadTimeoutMillis(5_000);
-                return;
-            } catch (SocketTimeoutException ex) {
-                // The subscribe frame has not been registered yet.
-            }
-        }
-        throw new AssertionError("subscriber did not become active");
     }
 
     private static byte[] payload(int round, int index) {

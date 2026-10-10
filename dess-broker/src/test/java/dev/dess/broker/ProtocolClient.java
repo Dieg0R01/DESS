@@ -66,6 +66,10 @@ public final class ProtocolClient implements AutoCloseable {
         socket.setSoTimeout(millis);
     }
 
+    public String endpoint() {
+        return socket.getLocalAddress().getHostAddress() + ":" + socket.getLocalPort();
+    }
+
     public Frame readFrame() throws IOException {
         return FrameCodec.read(input);
     }

@@ -13,14 +13,13 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -32,49 +31,33 @@ class BrokerLifecycleTest {
 
     @Test
     void startOnAFreePortAcceptsAndLogsStarted() throws Exception {
-        List<String> lines = new CopyOnWriteArrayList<>();
-        Logger logger = Logger.getLogger("dev.dess.broker");
-        Handler handler = capture(lines);
-        logger.setLevel(Level.INFO);
-        logger.addHandler(handler);
-        try (Broker broker = Broker.start(new BrokerConfig(0, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000))) {
+        try (LogCapture logs = LogCapture.open();
+                Broker broker = Broker.start(new BrokerConfig(0, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000))) {
             long started = System.nanoTime();
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 2_000);
             }
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofSeconds(2)) < 0);
-            assertEquals(1, count(lines, "event=broker.started", "version=1", "tcpPort=" + broker.port()));
-        } finally {
-            logger.removeHandler(handler);
+            assertEquals(1, logs.count("event=broker.started", "version=1", "tcpPort=" + broker.port()));
         }
     }
 
     @Test
     void takenPortNamesThePortAndDoesNotLogStarted() throws Exception {
-        List<String> lines = new CopyOnWriteArrayList<>();
-        Logger logger = Logger.getLogger("dev.dess.broker");
-        Handler handler = capture(lines);
-        logger.setLevel(Level.INFO);
-        logger.addHandler(handler);
-        try (ServerSocket taken = new ServerSocket(0)) {
+        try (LogCapture logs = LogCapture.open();
+                ServerSocket taken = new ServerSocket(0)) {
             int port = taken.getLocalPort();
             IOException failure = assertThrows(IOException.class, () -> Broker.start(new BrokerConfig(
                     port, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000)));
             assertTrue(failure.getMessage() != null && failure.getMessage().contains(Integer.toString(port)), failure.getMessage());
-            assertEquals(0, count(lines, "event=broker.started"));
-        } finally {
-            logger.removeHandler(handler);
+            assertEquals(0, logs.count("event=broker.started"));
         }
     }
 
     @Test
     void closeWithTwentyClientsStopsWithinFiveSeconds() throws Exception {
-        List<String> lines = new CopyOnWriteArrayList<>();
-        Logger logger = Logger.getLogger("dev.dess.broker");
-        Handler handler = capture(lines);
-        logger.setLevel(Level.INFO);
-        logger.addHandler(handler);
         List<ProtocolClient> clients = new ArrayList<>();
+        LogCapture logs = LogCapture.open();
         Broker broker = Broker.start(new BrokerConfig(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
         try {
             for (int index = 0; index < 20; index++) {
@@ -86,25 +69,25 @@ class BrokerLifecycleTest {
             broker.close();
             Duration elapsed = Duration.ofNanos(System.nanoTime() - started);
             assertTrue(elapsed.compareTo(Duration.ofSeconds(5)) < 0, elapsed::toString);
-            assertEquals(1, count(lines, "event=broker.stopped", "reason=CLOSE", "uptimeSeconds="));
-            assertEquals(20, count(lines, "event=client.disconnected", "reason=SHUTDOWN"));
+            assertEquals(1, logs.count("event=broker.stopped", "reason=CLOSE", "uptimeSeconds="));
+            assertEquals(20, logs.count("event=client.disconnected", "reason=SHUTDOWN"));
         } finally {
             for (ProtocolClient client : clients) {
                 client.close();
             }
             broker.close();
-            logger.removeHandler(handler);
+            logs.close();
         }
     }
 
     @Test
     void sigtermLogsSignalAndExitsZero() throws Exception {
-        Path output = Files.createTempFile("dess-broker-out", ".txt");
         Path error = Files.createTempFile("dess-broker-err", ".txt");
-        Process process = startBroker(output, error, "--port", "0");
+        Process process = startBroker(null, error, "--port", "0");
+        Stdout stdout = new Stdout(process);
         ProtocolClient client = null;
         try {
-            String text = awaitText(process, output, "event=broker.started");
+            String text = stdout.await("event=broker.started");
             assertTrue(text.contains("event=broker.started"), text + Files.readString(error));
             int port = portFrom(text);
             client = ProtocolClient.connect(port);
@@ -112,10 +95,10 @@ class BrokerLifecycleTest {
             long started = System.nanoTime();
             Process kill = new ProcessBuilder("kill", "-TERM", Long.toString(process.pid())).start();
             assertEquals(0, kill.waitFor());
-            assertTrue(process.waitFor(5, TimeUnit.SECONDS), Files.readString(output) + Files.readString(error));
+            assertTrue(process.waitFor(5, TimeUnit.SECONDS), stdout.text() + Files.readString(error));
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofSeconds(5)) < 0);
             assertEquals(0, process.exitValue());
-            String stopped = awaitText(process, output, "reason=SIGNAL");
+            String stopped = stdout.await("reason=SIGNAL");
             assertTrue(stopped.contains("event=broker.stopped"), stopped);
             assertTrue(stopped.contains("reason=SIGNAL"), stopped);
             assertTrue(stopped.contains("uptimeSeconds="), stopped);
@@ -127,7 +110,6 @@ class BrokerLifecycleTest {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
             }
-            Files.deleteIfExists(output);
             Files.deleteIfExists(error);
         }
     }
@@ -163,19 +145,67 @@ class BrokerLifecycleTest {
         command.add(System.getProperty("java.class.path"));
         command.add("dev.dess.broker.BrokerMain");
         command.addAll(List.of(args));
-        return new ProcessBuilder(command).redirectOutput(output.toFile()).redirectError(error.toFile()).start();
+        ProcessBuilder builder = new ProcessBuilder(command).redirectError(error.toFile());
+        if (output != null) {
+            builder.redirectOutput(output.toFile());
+        }
+        return builder.start();
     }
 
-    private static String awaitText(Process process, Path output, String needle) throws IOException {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        String text = "";
-        while (System.nanoTime() < deadline) {
-            text = Files.readString(output);
-            if (text.contains(needle)) {
-                return text;
+    private static final class Stdout {
+
+        private final StringBuilder text = new StringBuilder();
+        private final LinkedBlockingQueue<String> lines = new LinkedBlockingQueue<>();
+
+        private Stdout(Process process) {
+            Thread reader = new Thread(() -> pump(process), "dess-broker-stdout");
+            reader.setDaemon(true);
+            reader.start();
+        }
+
+        private void pump(Process process) {
+            try (BufferedReader input = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = input.readLine()) != null) {
+                    synchronized (text) {
+                        text.append(line).append('\n');
+                    }
+                    lines.put(line);
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            } catch (IOException ex) {
+                // The broker process closed its output.
             }
         }
-        return text;
+
+        private String await(String needle) throws InterruptedException {
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            String current = text();
+            if (current.contains(needle)) {
+                return current;
+            }
+            while (true) {
+                long wait = deadline - System.nanoTime();
+                if (wait <= 0) {
+                    return text();
+                }
+                String line = lines.poll(wait, TimeUnit.NANOSECONDS);
+                if (line == null) {
+                    return text();
+                }
+                current = text();
+                if (current.contains(needle)) {
+                    return current;
+                }
+            }
+        }
+
+        private String text() {
+            synchronized (text) {
+                return text.toString();
+            }
+        }
     }
 
     private static int portFrom(String text) {
@@ -190,39 +220,5 @@ class BrokerLifecycleTest {
             end++;
         }
         return Integer.parseInt(text.substring(start, end));
-    }
-
-    private static long count(List<String> lines, String... parts) {
-        return lines.stream().filter(line -> containsAll(line, parts)).count();
-    }
-
-    private static boolean containsAll(String line, String... parts) {
-        for (String part : parts) {
-            if (!line.contains(part)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static Handler capture(List<String> lines) {
-        Handler handler = new Handler() {
-            @Override
-            public void publish(LogRecord record) {
-                if (record.getMessage() != null) {
-                    lines.add(record.getMessage());
-                }
-            }
-
-            @Override
-            public void flush() {
-            }
-
-            @Override
-            public void close() {
-            }
-        };
-        handler.setLevel(Level.ALL);
-        return handler;
     }
 }

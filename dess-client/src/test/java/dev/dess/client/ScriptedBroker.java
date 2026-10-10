@@ -12,12 +12,15 @@ import java.net.Socket;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 final class ScriptedBroker implements AutoCloseable {
 
     private final ServerSocket server;
-    private final List<Frame> frames = new CopyOnWriteArrayList<>();
+    private final List<Frame> frames = new ArrayList<>();
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition frameArrived = lock.newCondition();
     private final Object writeLock = new Object();
     private final Thread acceptor;
     private volatile Socket client;
@@ -48,27 +51,43 @@ final class ScriptedBroker implements AutoCloseable {
     }
 
     List<Frame> frames() {
-        return List.copyOf(frames);
+        lock.lock();
+        try {
+            return List.copyOf(frames);
+        } finally {
+            lock.unlock();
+        }
     }
 
-    boolean await(Command command, String topic, Duration timeout) {
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (seen(command, topic)) {
-                return true;
+    boolean await(Command command, String topic, Duration timeout) throws InterruptedException {
+        long nanos = timeout.toNanos();
+        lock.lock();
+        try {
+            while (!seen(command, topic)) {
+                if (nanos <= 0) {
+                    return false;
+                }
+                nanos = frameArrived.awaitNanos(nanos);
             }
+            return true;
+        } finally {
+            lock.unlock();
         }
-        return false;
     }
 
     List<String> topics(Command command) {
-        List<String> names = new ArrayList<>();
-        for (Frame frame : frames) {
-            if (frame.command() == command) {
-                names.add(FrameCodec.topic(frame.header()));
+        lock.lock();
+        try {
+            List<String> names = new ArrayList<>();
+            for (Frame frame : frames) {
+                if (frame.command() == command) {
+                    names.add(FrameCodec.topic(frame.header()));
+                }
             }
+            return names;
+        } finally {
+            lock.unlock();
         }
-        return names;
     }
 
     @Override
@@ -82,6 +101,16 @@ final class ScriptedBroker implements AutoCloseable {
             acceptor.join(1_000);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private void record(Frame frame) {
+        lock.lock();
+        try {
+            frames.add(frame);
+            frameArrived.signalAll();
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -105,11 +134,11 @@ final class ScriptedBroker implements AutoCloseable {
             InputStream input = socket.getInputStream();
             output = socket.getOutputStream();
             Frame hello = FrameCodec.read(input);
-            frames.add(hello);
+            record(hello);
             write(new Frame(Command.HELLO, FrameCodec.helloHeader(FrameCodec.PROTOCOL_VERSION), new byte[0]));
             while (true) {
                 Frame frame = FrameCodec.read(input);
-                frames.add(frame);
+                record(frame);
                 reply(frame);
             }
         } catch (IOException ex) {

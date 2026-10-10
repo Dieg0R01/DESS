@@ -8,18 +8,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.Frame;
-import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -32,12 +25,8 @@ class IdleTimeoutTest {
     @Test
     void pingKeepsTheClientAndSilenceRemovesTheSubscription() throws Exception {
         int timeout = 400;
-        List<String> lines = new CopyOnWriteArrayList<>();
-        Logger logger = Logger.getLogger("dev.dess.broker");
-        Handler handler = capture(lines);
-        logger.setLevel(Level.INFO);
-        logger.addHandler(handler);
-        try (BrokerHarness harness = BrokerHarness.start(new BrokerConfig(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, timeout));
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start(new BrokerConfig(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, timeout));
                 ProtocolClient publisher = ProtocolClient.connect(harness.port());
                 ProtocolClient watcher = ProtocolClient.connect(harness.port());
                 ProtocolClient silent = ProtocolClient.connect(harness.port())) {
@@ -49,6 +38,8 @@ class IdleTimeoutTest {
             silent.hello();
             watcher.subscribe("sales");
             silent.subscribe("sales");
+            logs.awaitAdded(watcher, "sales");
+            logs.awaitAdded(silent, "sales");
 
             AtomicBoolean done = new AtomicBoolean();
             AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -69,8 +60,9 @@ class IdleTimeoutTest {
             heartbeats.join(2_000);
             assertNull(failure.get());
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(timeout + 1_000)) < 0);
-            assertTrue(waitFor(lines, started, timeout, "event=client.disconnected", "reason=TIMEOUT"));
-            assertTrue(lines.stream().anyMatch(line -> line.contains("event=subscription.removed") && line.contains("reason=DISCONNECT")));
+            long remaining = Duration.ofMillis(timeout + 1_000).toNanos() - (System.nanoTime() - started);
+            assertTrue(logs.await(Duration.ofNanos(Math.max(remaining, 0)), "event=client.disconnected", "reason=TIMEOUT"), () -> logs.lines().toString());
+            assertTrue(logs.lines().stream().anyMatch(line -> line.contains("event=subscription.removed") && line.contains("reason=DISCONNECT")));
 
             ping(publisher);
             byte[] payload = "later".getBytes(StandardCharsets.UTF_8);
@@ -79,8 +71,6 @@ class IdleTimeoutTest {
             Frame delivered = watcher.readFrame();
             assertEquals(Command.DELIVER, delivered.command());
             assertArrayEquals(payload, delivered.payload());
-        } finally {
-            logger.removeHandler(handler);
         }
     }
 
@@ -92,43 +82,4 @@ class IdleTimeoutTest {
         assertEquals(0, pong.payload().length);
     }
 
-    private static boolean waitFor(List<String> lines, long started, int timeout, String... parts) {
-        long deadline = started + Duration.ofMillis(timeout + 1_000).toNanos();
-        while (System.nanoTime() < deadline) {
-            if (lines.stream().anyMatch(line -> containsAll(line, parts))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean containsAll(String line, String... parts) {
-        for (String part : parts) {
-            if (!line.contains(part)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static Handler capture(List<String> lines) {
-        Handler handler = new Handler() {
-            @Override
-            public void publish(LogRecord record) {
-                if (record.getMessage() != null) {
-                    lines.add(record.getMessage());
-                }
-            }
-
-            @Override
-            public void flush() {
-            }
-
-            @Override
-            public void close() {
-            }
-        };
-        handler.setLevel(Level.ALL);
-        return handler;
-    }
 }

@@ -5,11 +5,8 @@ import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.time.Duration;
 
 public final class BrokerHarness implements AutoCloseable {
-
-    private static final Duration START_TIMEOUT = Duration.ofSeconds(2);
 
     private final Broker broker;
 
@@ -23,17 +20,13 @@ public final class BrokerHarness implements AutoCloseable {
 
     public static BrokerHarness start(BrokerConfig config) {
         Broker broker = open(config);
-        long deadline = System.nanoTime() + START_TIMEOUT.toNanos();
-        while (System.nanoTime() < deadline) {
-            try (Socket probe = new Socket()) {
-                probe.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 200);
-                return new BrokerHarness(broker);
-            } catch (IOException ex) {
-                // The accept thread may not be blocked in accept() yet.
-            }
+        try (Socket probe = new Socket()) {
+            probe.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 2_000);
+            return new BrokerHarness(broker);
+        } catch (IOException ex) {
+            broker.close();
+            throw new IllegalStateException("Broker did not accept a connection within 2 seconds", ex);
         }
-        broker.close();
-        throw new IllegalStateException("Broker did not accept a connection within 2 seconds");
     }
 
     public int port() {

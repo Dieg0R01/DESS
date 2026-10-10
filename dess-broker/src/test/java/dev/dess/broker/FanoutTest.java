@@ -10,7 +10,6 @@ import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -25,7 +24,8 @@ class FanoutTest {
 
     @Test
     void threeSubscribersEachReceiveOneCopy() throws Exception {
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient producer = ProtocolClient.connect(harness.port());
                 ProtocolClient first = ProtocolClient.connect(harness.port());
                 ProtocolClient second = ProtocolClient.connect(harness.port());
@@ -34,7 +34,7 @@ class FanoutTest {
             first.subscribe("sales");
             second.subscribe("sales");
             third.subscribe("sales");
-            awaitSubscribed(producer, List.of(first, second, third), "sales");
+            awaitSubscribed(logs, List.of(first, second, third), "sales");
 
             byte[] payload = "one".getBytes(StandardCharsets.UTF_8);
             producer.publish("sales", payload);
@@ -51,7 +51,8 @@ class FanoutTest {
 
     @Test
     void otherTopicsAndLateSubscribersDoNotSeeThePublish() throws Exception {
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient producer = ProtocolClient.connect(harness.port());
                 ProtocolClient topicA = ProtocolClient.connect(harness.port());
                 ProtocolClient topicB = ProtocolClient.connect(harness.port());
@@ -59,8 +60,8 @@ class FanoutTest {
             arm(producer, topicA, topicB, late);
             topicA.subscribe("a");
             topicB.subscribe("b");
-            awaitSubscribed(producer, List.of(topicA), "a");
-            awaitSubscribed(producer, List.of(topicB), "b");
+            awaitSubscribed(logs, List.of(topicA), "a");
+            awaitSubscribed(logs, List.of(topicB), "b");
 
             byte[] forB = "only-b".getBytes(StandardCharsets.UTF_8);
             producer.publish("b", forB);
@@ -74,6 +75,7 @@ class FanoutTest {
             producer.publish("quiet", discarded);
             assertAck(producer, "quiet");
             late.subscribe("quiet");
+            logs.awaitAdded(late, "quiet");
             late.setReadTimeoutMillis(200);
             assertThrows(SocketTimeoutException.class, late::readFrame);
 
@@ -88,7 +90,8 @@ class FanoutTest {
 
     @Test
     void failedSubscriberIsClosedAndTheOtherStillReceives() throws Exception {
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient producer = ProtocolClient.connect(harness.port());
                 ProtocolClient healthy = ProtocolClient.connect(harness.port())) {
             ClientConnection.forceSendBuffer(1024);
@@ -100,7 +103,7 @@ class FanoutTest {
                 arm(producer, healthy);
                 healthy.subscribe("sales");
                 failing.subscribe("sales");
-                awaitSubscribed(producer, List.of(healthy, failing), "sales");
+                awaitSubscribed(logs, List.of(healthy, failing), "sales");
                 failing.shrinkReceiveBuffer(1024);
 
                 byte[] payload = new byte[512 * 1024];
@@ -145,13 +148,14 @@ class FanoutTest {
 
     @Test
     void concurrentProducersKeepTheirOwnOrder() throws Exception {
-        try (BrokerHarness harness = BrokerHarness.start();
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient first = ProtocolClient.connect(harness.port());
                 ProtocolClient second = ProtocolClient.connect(harness.port());
                 ProtocolClient consumer = ProtocolClient.connect(harness.port())) {
             arm(first, second, consumer);
             consumer.subscribe("sales");
-            awaitSubscribed(first, List.of(consumer), "sales");
+            awaitSubscribed(logs, List.of(consumer), "sales");
 
             AtomicReference<Throwable> failure = new AtomicReference<>();
             Thread left = publisher(first, "A", 30, failure);
@@ -193,33 +197,10 @@ class FanoutTest {
         }
     }
 
-    private static void awaitSubscribed(ProtocolClient producer, List<ProtocolClient> consumers, String topic) throws Exception {
-        byte[] ready = ("ready-" + topic).getBytes(StandardCharsets.UTF_8);
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (System.nanoTime() < deadline) {
-            producer.publish(topic, ready);
-            assertAck(producer, topic);
-            int seen = 0;
-            for (ProtocolClient consumer : consumers) {
-                consumer.setReadTimeoutMillis(200);
-                try {
-                    while (true) {
-                        Frame delivered = consumer.readFrame();
-                        if (new String(delivered.payload(), StandardCharsets.UTF_8).startsWith("ready-")) {
-                            seen++;
-                            break;
-                        }
-                    }
-                } catch (SocketTimeoutException ex) {
-                    // This subscriber has not registered yet.
-                }
-                consumer.setReadTimeoutMillis(5_000);
-            }
-            if (seen == consumers.size()) {
-                return;
-            }
+    private static void awaitSubscribed(LogCapture logs, List<ProtocolClient> consumers, String topic) throws Exception {
+        for (ProtocolClient consumer : consumers) {
+            logs.awaitAdded(consumer, topic);
         }
-        throw new AssertionError("subscribers did not become active");
     }
 
     private static void assertAck(ProtocolClient producer, String topic) throws Exception {
