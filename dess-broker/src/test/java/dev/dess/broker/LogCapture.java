@@ -76,16 +76,26 @@ final class LogCapture implements AutoCloseable {
         }
     }
 
+    boolean awaitAtLeast(Duration timeout, long minimum, String... parts) throws InterruptedException {
+        long nanos = timeout.toNanos();
+        lock.lock();
+        try {
+            while (matching(parts) < minimum) {
+                if (nanos <= 0) {
+                    return false;
+                }
+                nanos = arrived.awaitNanos(nanos);
+            }
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     long count(String... parts) {
         lock.lock();
         try {
-            long count = 0;
-            for (String line : lines) {
-                if (containsAll(line, parts)) {
-                    count++;
-                }
-            }
-            return count;
+            return matching(parts);
         } finally {
             lock.unlock();
         }
@@ -116,9 +126,17 @@ final class LogCapture implements AutoCloseable {
 
     void awaitAdded(ProtocolClient client, String topic) throws InterruptedException {
         String id = clientId(client.endpoint());
-        String clientToken = "clientId=" + id + " ";
-        if (!await(Duration.ofSeconds(2), "event=subscription.added", clientToken, "topic=" + topic)) {
-            throw new AssertionError("subscription.added missing for " + id + " on " + topic + " in " + lines());
+        long nanos = Duration.ofSeconds(2).toNanos();
+        lock.lock();
+        try {
+            while (!added(id, topic)) {
+                if (nanos <= 0) {
+                    throw new AssertionError("subscription.added missing for " + id + " on " + topic + " in " + List.copyOf(lines));
+                }
+                nanos = arrived.awaitNanos(nanos);
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -150,6 +168,17 @@ final class LogCapture implements AutoCloseable {
         }
     }
 
+    private boolean added(String id, String topic) {
+        for (String line : lines) {
+            if (line.contains("event=subscription.added")
+                    && id.equals(property(line, "clientId"))
+                    && topic.equals(property(line, "topic"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String findClient(String remoteAddress) {
         for (String line : lines) {
             if (line.contains("event=client.connected") && remoteAddress.equals(property(line, "remoteAddress"))) {
@@ -157,6 +186,16 @@ final class LogCapture implements AutoCloseable {
             }
         }
         return null;
+    }
+
+    private long matching(String... parts) {
+        long count = 0;
+        for (String line : lines) {
+            if (containsAll(line, parts)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private boolean matches(String... parts) {

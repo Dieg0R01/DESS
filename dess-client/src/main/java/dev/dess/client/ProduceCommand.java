@@ -36,6 +36,11 @@ final class ProduceCommand {
                 if (reply.command() != Command.ACK) {
                     return fail(err, "unexpected " + reply.command());
                 }
+                try {
+                    FrameCodec.brokerAck(reply.header());
+                } catch (FrameException ex) {
+                    return fail(err, "malformed ack");
+                }
             }
             return 0;
         } catch (IOException ex) {

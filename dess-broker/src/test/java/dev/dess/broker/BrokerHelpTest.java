@@ -42,6 +42,14 @@ class BrokerHelpTest {
         assertEquals(2, missing.exitCode());
         assertEquals("", missing.stdout());
         assertUsage(missing.stderr(), "dess-broker");
+
+        Result badAuto = run("--auto-create-topics", "maybe");
+        assertEquals(2, badAuto.exitCode());
+        assertUsage(badAuto.stderr(), "dess-broker");
+
+        Result oversizedOutbound = run("--outbound-capacity", "2000", "--topic-queue-capacity", "10");
+        assertEquals(2, oversizedOutbound.exitCode());
+        assertUsage(oversizedOutbound.stderr(), "dess-broker");
     }
 
     private static void assertHelp(String stdout, String artifact) {
@@ -50,14 +58,14 @@ class BrokerHelpTest {
         assertEquals("", lines[3]);
         assertMessage(lines[0], "INFO", artifact);
         assertMessage(lines[1], "INFO", "dev");
-        assertMessage(lines[2], "INFO", "Usage: " + artifact + " [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--log-level LEVEL]");
+        assertMessage(lines[2], "INFO", BrokerMain.USAGE);
     }
 
     private static void assertUsage(String stderr, String artifact) {
         String[] lines = stderr.split("\\R", -1);
         assertEquals(2, lines.length);
         assertEquals("", lines[1]);
-        assertMessage(lines[0], "INFO", "Usage: " + artifact + " [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--log-level LEVEL]");
+        assertMessage(lines[0], "INFO", BrokerMain.USAGE);
     }
 
     private static void assertMessage(String line, String level, String message) {

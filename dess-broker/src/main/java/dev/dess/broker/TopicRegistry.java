@@ -18,13 +18,6 @@ public final class TopicRegistry {
         return topics.get(topic.name()) == topic;
     }
 
-    /** Caller holds {@code topic}. */
-    public void dropIfEmpty(Topic topic) {
-        if (topic.isEmpty()) {
-            topics.remove(topic.name(), topic);
-        }
-    }
-
     public void subscribe(ClientConnection connection, String name) {
         while (true) {
             Topic topic = open(name);
@@ -53,7 +46,6 @@ public final class TopicRegistry {
                 properties.put("reason", reason);
                 event("subscription.removed", properties);
             }
-            dropIfEmpty(topic);
         }
     }
 
@@ -72,6 +64,9 @@ public final class TopicRegistry {
         /** Guarded by this topic, which is the delivery lock. */
         private final ConcurrentHashMap<Long, ClientConnection> subscribers = new ConcurrentHashMap<>();
 
+        /** Guarded by this topic, which is the delivery lock. */
+        private long nextOffset;
+
         private Topic(String name) {
             this.name = name;
         }
@@ -88,8 +83,8 @@ public final class TopicRegistry {
             return subscribers.remove(id) != null;
         }
 
-        boolean isEmpty() {
-            return subscribers.isEmpty();
+        long takeOffset() {
+            return nextOffset++;
         }
 
         List<ClientConnection> snapshot() {

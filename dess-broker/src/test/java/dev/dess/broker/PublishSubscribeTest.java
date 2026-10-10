@@ -38,12 +38,12 @@ class PublishSubscribeTest {
                     producer.publish("sales", payload);
                     Frame ack = producer.readFrame();
                     assertEquals(Command.ACK, ack.command());
-                    assertEquals("sales", FrameCodec.topic(ack.header()));
+                    assertEquals("sales", producer.brokerAck(ack).topic());
                     assertEquals(0, ack.payload().length);
 
                     Frame delivered = consumer.readFrame();
                     assertEquals(Command.DELIVER, delivered.command());
-                    assertEquals("sales", FrameCodec.topic(delivered.header()));
+                    assertEquals("sales", FrameCodec.delivery(delivered.header()).topic());
                     assertArrayEquals(payload, delivered.payload());
                 }
             }

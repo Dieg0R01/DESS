@@ -19,7 +19,7 @@ public final class FrameCodec {
 
     public static final int MAX_FRAME_LENGTH = 16 * 1024 * 1024 + 1031;
 
-    public static final int PROTOCOL_VERSION = 1;
+    public static final int PROTOCOL_VERSION = 2;
 
     private static final int DISCARD_CHUNK = 8192;
 
@@ -139,14 +139,12 @@ public final class FrameCodec {
     }
 
     public static String topic(byte[] header) {
-        if (header == null || header.length < 2) {
-            throw new FrameException(ErrorCode.MALFORMED_FRAME, "topic header is truncated");
-        }
+        String name = leadingTopic(header);
         int length = ((header[0] & 0xff) << 8) | (header[1] & 0xff);
         if (length != header.length - 2) {
             throw new FrameException(ErrorCode.MALFORMED_FRAME, "topic length does not match");
         }
-        return utf8(Arrays.copyOfRange(header, 2, header.length));
+        return name;
     }
 
     public static byte[] errorHeader(String code, String reason) {
@@ -172,6 +170,128 @@ public final class FrameCodec {
 
     public static String errorReason(byte[] header) {
         return errorParts(header)[1];
+    }
+
+    public static byte[] publishHeader(String topic, ConfirmationMode mode) {
+        if (mode == null) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "confirmation mode is required");
+        }
+        byte[] topicBytes = topicHeader(topic);
+        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + 1);
+        header[header.length - 1] = (byte) mode.wire();
+        return header;
+    }
+
+    public static Publication publication(byte[] header) {
+        if (header == null || header.length < 3) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "publish header is truncated");
+        }
+        String topic = topic(Arrays.copyOf(header, header.length - 1));
+        return new Publication(topic, ConfirmationMode.fromWire(header[header.length - 1] & 0xff));
+    }
+
+    public static byte[] deliverHeader(String topic, long offset) {
+        byte[] topicBytes = topicHeader(topic);
+        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + 8);
+        putLong(header, topicBytes.length, offset);
+        return header;
+    }
+
+    public static Delivery delivery(byte[] header) {
+        if (header == null || header.length < 10) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "deliver header is truncated");
+        }
+        int topicLength = header.length - 8;
+        return new Delivery(topic(Arrays.copyOf(header, topicLength)), readLong(header, topicLength));
+    }
+
+    public static byte[] brokerAckHeader(String topic, long offset, ConfirmationMode mode, int acknowledgements) {
+        if (mode == null) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "confirmation mode is required");
+        }
+        byte[] topicBytes = topicHeader(topic);
+        byte[] header = new byte[topicBytes.length + 13];
+        System.arraycopy(topicBytes, 0, header, 0, topicBytes.length);
+        putLong(header, topicBytes.length, offset);
+        header[topicBytes.length + 8] = (byte) mode.wire();
+        putInt(header, topicBytes.length + 9, acknowledgements);
+        return header;
+    }
+
+    public static BrokerAck brokerAck(byte[] header) {
+        if (header == null || header.length < 15) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "ack header is truncated");
+        }
+        int topicLength = header.length - 13;
+        String topic = topic(Arrays.copyOf(header, topicLength));
+        long offset = readLong(header, topicLength);
+        ConfirmationMode mode = ConfirmationMode.fromWire(header[topicLength + 8] & 0xff);
+        int acknowledgements = readInt(header, topicLength + 9);
+        return new BrokerAck(topic, offset, mode, acknowledgements);
+    }
+
+    public static byte[] clientAckHeader(String topic, long offset) {
+        byte[] topicBytes = topicHeader(topic);
+        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + 8);
+        putLong(header, topicBytes.length, offset);
+        return header;
+    }
+
+    public static ClientAck clientAck(byte[] header) {
+        if (header == null || header.length < 10) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "ack header is truncated");
+        }
+        int topicLength = header.length - 8;
+        return new ClientAck(topic(Arrays.copyOf(header, topicLength)), readLong(header, topicLength));
+    }
+
+    public static byte[] ackTimeoutHeader(String code, String reason, String topic, long offset, int expected, int received) {
+        byte[] error = errorHeader(code, reason);
+        byte[] topicBytes = topicHeader(topic);
+        byte[] header = new byte[error.length + topicBytes.length + 16];
+        System.arraycopy(error, 0, header, 0, error.length);
+        System.arraycopy(topicBytes, 0, header, error.length, topicBytes.length);
+        int at = error.length + topicBytes.length;
+        putLong(header, at, offset);
+        putInt(header, at + 8, expected);
+        putInt(header, at + 12, received);
+        return header;
+    }
+
+    public static AckTimeout ackTimeout(byte[] header) {
+        if (header == null || header.length < 4) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "error header is truncated");
+        }
+        int codeLength = ((header[0] & 0xff) << 8) | (header[1] & 0xff);
+        int reasonAt = 2 + codeLength;
+        if (reasonAt + 2 > header.length) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "error code length does not match");
+        }
+        int reasonLength = ((header[reasonAt] & 0xff) << 8) | (header[reasonAt + 1] & 0xff);
+        int errorEnd = reasonAt + 2 + reasonLength;
+        if (errorEnd + 2 + 8 + 4 + 4 > header.length) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "ack timeout header is truncated");
+        }
+        int topicBytes = ((header[errorEnd] & 0xff) << 8) | (header[errorEnd + 1] & 0xff);
+        int afterTopic = errorEnd + 2 + topicBytes;
+        if (afterTopic + 16 != header.length) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "ack timeout header length does not match");
+        }
+        String code = utf8(Arrays.copyOfRange(header, 2, reasonAt));
+        String reason = utf8(Arrays.copyOfRange(header, reasonAt + 2, errorEnd));
+        String topic = topic(Arrays.copyOfRange(header, errorEnd, afterTopic));
+        return new AckTimeout(code, reason, topic, readLong(header, afterTopic), readInt(header, afterTopic + 8), readInt(header, afterTopic + 12));
+    }
+
+    public static String leadingTopic(byte[] header) {
+        if (header == null || header.length < 2) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "topic header is truncated");
+        }
+        int length = ((header[0] & 0xff) << 8) | (header[1] & 0xff);
+        if (2 + length > header.length) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "topic length does not match");
+        }
+        return utf8(Arrays.copyOfRange(header, 2, 2 + length));
     }
 
     private static Frame parse(byte[] encoded, int offset, int frameLength) {
@@ -216,11 +336,33 @@ public final class FrameCodec {
         return new String[] {code, reason};
     }
 
+    private static void putInt(byte[] dest, int at, int value) {
+        dest[at] = (byte) (value >>> 24);
+        dest[at + 1] = (byte) (value >>> 16);
+        dest[at + 2] = (byte) (value >>> 8);
+        dest[at + 3] = (byte) value;
+    }
+
+    private static void putLong(byte[] dest, int at, long value) {
+        for (int index = 7; index >= 0; index--) {
+            dest[at + index] = (byte) value;
+            value >>>= 8;
+        }
+    }
+
     private static int readInt(byte[] bytes, int offset) {
         return ((bytes[offset] & 0xff) << 24)
                 | ((bytes[offset + 1] & 0xff) << 16)
                 | ((bytes[offset + 2] & 0xff) << 8)
                 | (bytes[offset + 3] & 0xff);
+    }
+
+    private static long readLong(byte[] bytes, int offset) {
+        long value = 0;
+        for (int index = 0; index < 8; index++) {
+            value = (value << 8) | (bytes[offset + index] & 0xff);
+        }
+        return value;
     }
 
     private static void discard(InputStream input, int length) throws IOException {

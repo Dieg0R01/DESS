@@ -2,10 +2,12 @@ package dev.dess.broker;
 
 import dev.dess.common.logging.Logging;
 import dev.dess.common.protocol.Command;
+import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.ErrorCode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import dev.dess.common.protocol.FrameException;
+import dev.dess.common.protocol.Publication;
 import dev.dess.common.protocol.TopicName;
 import java.io.EOFException;
 import java.io.IOException;
@@ -124,11 +126,11 @@ public final class ClientConnection implements Runnable {
         }
     }
 
-    void writeDeliver(String topic, byte[] payload) throws IOException {
+    void writeDeliver(String topic, long offset, byte[] payload) throws IOException {
         if (state == State.CLOSING) {
             throw new IOException("connection is closing");
         }
-        writeFrame(new Frame(Command.DELIVER, FrameCodec.topicHeader(topic), payload));
+        writeFrame(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset), payload));
     }
 
     void cleanup() {
@@ -163,11 +165,7 @@ public final class ClientConnection implements Runnable {
             case PUBLISH -> publish(frame);
             case UNSUBSCRIBE -> unsubscribe(frame);
             case PING -> writeFrame(new Frame(Command.PONG, new byte[0], new byte[0]));
-            case ACK -> {
-                if (frame.header().length != 0 || frame.payload().length != 0) {
-                    fail(ErrorCode.MALFORMED_FRAME, "malformed ack");
-                }
-            }
+            case ACK -> acknowledge(frame);
             case PONG, ERROR, DELIVER -> {
                 // Server-originated frames from a client are ignored until confirmation modes exist.
             }
@@ -199,7 +197,7 @@ public final class ClientConnection implements Runnable {
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("clientId", Long.toString(id));
         properties.put("remoteAddress", remoteAddress);
-        properties.put("protocolVersion", "1");
+        properties.put("protocolVersion", Integer.toString(FrameCodec.PROTOCOL_VERSION));
         Logging.event("dev.dess.broker", "client.connected", properties);
     }
 
@@ -234,10 +232,23 @@ public final class ClientConnection implements Runnable {
     }
 
     private void publish(Frame frame) throws IOException {
-        String topic = topic(frame);
-        if (topic == null) {
+        Publication publication;
+        try {
+            publication = FrameCodec.publication(frame.header());
+        } catch (FrameException ex) {
+            fail(ErrorCode.MALFORMED_FRAME, "malformed publish");
             return;
         }
+        ConfirmationMode mode = publication.mode();
+        switch (mode) {
+            case BROKER, ALL -> {
+            }
+            default -> {
+                ConfirmationMode unexpected = mode;
+                throw new IllegalStateException("Unhandled mode " + unexpected);
+            }
+        }
+        String topic = publication.topic();
         byte[] payload = frame.payload();
         if (!TopicName.isValid(topic)) {
             reject(topic, ErrorCode.INVALID_TOPIC_NAME, "invalid topic name");
@@ -247,6 +258,7 @@ public final class ClientConnection implements Runnable {
             reject(topic, ErrorCode.PAYLOAD_TOO_LARGE, "payload is too large");
             return;
         }
+        long offset;
         List<ClientConnection> failed = new ArrayList<>();
         while (true) {
             TopicRegistry.Topic channel = registry.open(topic);
@@ -254,27 +266,40 @@ public final class ClientConnection implements Runnable {
                 if (!registry.isCurrent(channel)) {
                     continue;
                 }
+                offset = channel.takeOffset();
                 for (ClientConnection subscriber : channel.snapshot()) {
                     try {
-                        subscriber.writeDeliver(topic, payload);
+                        subscriber.writeDeliver(topic, offset, payload);
                     } catch (IOException ex) {
                         failed.add(subscriber);
                         registry.remove(subscriber, topic, "DISCONNECT");
                     }
                 }
-                registry.dropIfEmpty(channel);
                 break;
             }
         }
         for (ClientConnection subscriber : failed) {
             subscriber.cleanup();
         }
-        writeFrame(new Frame(Command.ACK, FrameCodec.topicHeader(topic), new byte[0]));
+        writeFrame(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, offset, ConfirmationMode.BROKER, 0), new byte[0]));
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("topic", topic);
+        properties.put("offset", Long.toString(offset));
         properties.put("sizeBytes", Integer.toString(payload.length));
         properties.put("clientId", Long.toString(id));
         Logging.event("dev.dess.broker", "message.accepted", properties);
+    }
+
+    private void acknowledge(Frame frame) throws IOException {
+        if (frame.payload().length != 0) {
+            fail(ErrorCode.MALFORMED_FRAME, "malformed ack");
+            return;
+        }
+        try {
+            FrameCodec.clientAck(frame.header());
+        } catch (FrameException ex) {
+            fail(ErrorCode.MALFORMED_FRAME, "malformed ack");
+        }
     }
 
     private String topic(Frame frame) throws IOException {

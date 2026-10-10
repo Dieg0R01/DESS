@@ -36,7 +36,7 @@ final class ConsumeCommand {
             while (true) {
                 Frame frame = session.readFrame();
                 if (frame.command() == Command.DELIVER) {
-                    String topic = FrameCodec.topic(frame.header());
+                    String topic = FrameCodec.delivery(frame.header()).topic();
                     String text = new String(frame.payload(), StandardCharsets.UTF_8);
                     out.println(topic + " " + text);
                 }

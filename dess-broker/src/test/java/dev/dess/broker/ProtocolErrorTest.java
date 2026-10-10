@@ -42,7 +42,7 @@ class ProtocolErrorTest {
                 producer.publish("sales", payload);
                 Frame ack = producer.readFrame();
                 assertEquals(Command.ACK, ack.command());
-                assertEquals("sales", FrameCodec.topic(ack.header()));
+                assertEquals("sales", producer.brokerAck(ack).topic());
                 assertEquals(0, ack.payload().length);
                 Frame delivered = consumer.readFrame();
                 assertEquals(Command.DELIVER, delivered.command());
@@ -52,12 +52,12 @@ class ProtocolErrorTest {
     }
 
     @Test
-    void versionOneHelloIsAnsweredAndASecondHelloCloses() throws Exception {
+    void secondHelloCloses() throws Exception {
         try (BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient client = ProtocolClient.connect(harness.port())) {
             arm(client);
             client.hello();
-            client.writeEncoded(FrameCodec.encode(new Frame(Command.HELLO, FrameCodec.helloHeader(1), new byte[0])));
+            client.writeEncoded(FrameCodec.encode(new Frame(Command.HELLO, FrameCodec.helloHeader(FrameCodec.PROTOCOL_VERSION), new byte[0])));
             assertError(client, "MALFORMED_FRAME");
             assertClosed(client);
         }
@@ -146,6 +146,14 @@ class ProtocolErrorTest {
             arm(client);
             client.hello();
             client.writeEncoded(FrameCodec.encode(new Frame(Command.ACK, new byte[0], new byte[0])));
+            assertError(client, "MALFORMED_FRAME");
+            assertClosed(client);
+        }
+        try (BrokerHarness harness = BrokerHarness.start();
+                ProtocolClient client = ProtocolClient.connect(harness.port())) {
+            arm(client);
+            client.hello();
+            client.acknowledge("sales", 0);
             assertStillOpen(client);
         }
     }

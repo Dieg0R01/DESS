@@ -1,6 +1,7 @@
 package dev.dess.client;
 
 import dev.dess.common.protocol.Command;
+import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
@@ -26,6 +27,7 @@ final class ScriptedBroker implements AutoCloseable {
     private volatile Socket client;
     private volatile OutputStream output;
     private volatile String publishError;
+    private long nextOffset;
 
     private ScriptedBroker(ServerSocket server) {
         this.server = server;
@@ -47,7 +49,7 @@ final class ScriptedBroker implements AutoCloseable {
     }
 
     void deliver(String topic, byte[] payload) throws IOException {
-        write(new Frame(Command.DELIVER, FrameCodec.topicHeader(topic), payload));
+        write(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, nextOffset++), payload));
     }
 
     List<Frame> frames() {
@@ -81,7 +83,7 @@ final class ScriptedBroker implements AutoCloseable {
             List<String> names = new ArrayList<>();
             for (Frame frame : frames) {
                 if (frame.command() == command) {
-                    names.add(FrameCodec.topic(frame.header()));
+                    names.add(FrameCodec.leadingTopic(frame.header()));
                 }
             }
             return names;
@@ -119,7 +121,7 @@ final class ScriptedBroker implements AutoCloseable {
             if (frame.command() != command) {
                 continue;
             }
-            if (topic == null || topic.equals(FrameCodec.topic(frame.header()))) {
+            if (topic == null || topic.equals(FrameCodec.leadingTopic(frame.header()))) {
                 return true;
             }
         }
@@ -151,7 +153,8 @@ final class ScriptedBroker implements AutoCloseable {
             case PUBLISH -> {
                 String code = publishError;
                 if (code == null) {
-                    write(new Frame(Command.ACK, frame.header(), new byte[0]));
+                    String topic = FrameCodec.publication(frame.header()).topic();
+                    write(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, 0, ConfirmationMode.BROKER, 0), new byte[0]));
                 } else {
                     write(new Frame(Command.ERROR, FrameCodec.errorHeader(code, "rejected"), new byte[0]));
                 }

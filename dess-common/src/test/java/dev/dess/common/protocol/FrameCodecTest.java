@@ -12,6 +12,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 class FrameCodecTest {
@@ -45,6 +46,55 @@ class FrameCodecTest {
         byte[] error = FrameCodec.errorHeader("PAYLOAD_TOO_LARGE", "too big");
         assertEquals("PAYLOAD_TOO_LARGE", FrameCodec.errorCode(error));
         assertEquals("too big", FrameCodec.errorReason(error));
+    }
+
+    @Test
+    void versionTwoHeadersRoundTripAndRejectABadShape() {
+        assertEquals(2, FrameCodec.PROTOCOL_VERSION);
+        long offset = Integer.MAX_VALUE + 1L;
+
+        byte[] publish = FrameCodec.publishHeader("sales", ConfirmationMode.ALL);
+        Publication publication = FrameCodec.publication(publish);
+        assertEquals("sales", publication.topic());
+        assertEquals(ConfirmationMode.ALL, publication.mode());
+
+        byte[] deliver = FrameCodec.deliverHeader("stock", offset);
+        Delivery delivery = FrameCodec.delivery(deliver);
+        assertEquals("stock", delivery.topic());
+        assertEquals(offset, delivery.offset());
+
+        byte[] ack = FrameCodec.brokerAckHeader("sales", offset, ConfirmationMode.ALL, 3);
+        BrokerAck brokerAck = FrameCodec.brokerAck(ack);
+        assertEquals("sales", brokerAck.topic());
+        assertEquals(offset, brokerAck.offset());
+        assertEquals(ConfirmationMode.ALL, brokerAck.mode());
+        assertEquals(3, brokerAck.acknowledgements());
+
+        byte[] clientAck = FrameCodec.clientAckHeader("sales", offset);
+        ClientAck decodedAck = FrameCodec.clientAck(clientAck);
+        assertEquals("sales", decodedAck.topic());
+        assertEquals(offset, decodedAck.offset());
+
+        byte[] timeout = FrameCodec.ackTimeoutHeader("ACK_TIMEOUT", "too late", "sales", offset, 3, 1);
+        AckTimeout decodedTimeout = FrameCodec.ackTimeout(timeout);
+        assertEquals("ACK_TIMEOUT", decodedTimeout.code());
+        assertEquals("too late", decodedTimeout.reason());
+        assertEquals("sales", decodedTimeout.topic());
+        assertEquals(offset, decodedTimeout.offset());
+        assertEquals(3, decodedTimeout.expected());
+        assertEquals(1, decodedTimeout.received());
+
+        byte[] trailing = Arrays.copyOf(publish, publish.length + 1);
+        FrameException extra = assertThrows(FrameException.class, () -> FrameCodec.publication(trailing));
+        assertEquals(ErrorCode.MALFORMED_FRAME, extra.code());
+
+        FrameException shortHeader = assertThrows(FrameException.class, () -> FrameCodec.publication(new byte[] {0}));
+        assertEquals(ErrorCode.MALFORMED_FRAME, shortHeader.code());
+
+        byte[] unknownMode = Arrays.copyOf(publish, publish.length);
+        unknownMode[unknownMode.length - 1] = 2;
+        FrameException badMode = assertThrows(FrameException.class, () -> FrameCodec.publication(unknownMode));
+        assertEquals(ErrorCode.MALFORMED_FRAME, badMode.code());
     }
 
     @Test
@@ -97,9 +147,11 @@ class FrameCodecTest {
 
     private static byte[] headerFor(Command command) {
         return switch (command) {
-            case HELLO -> FrameCodec.helloHeader(1);
-            case PUBLISH, SUBSCRIBE, UNSUBSCRIBE, DELIVER -> FrameCodec.topicHeader("sales");
-            case ACK -> FrameCodec.topicHeader("sales");
+            case HELLO -> FrameCodec.helloHeader(FrameCodec.PROTOCOL_VERSION);
+            case PUBLISH -> FrameCodec.publishHeader("sales", ConfirmationMode.BROKER);
+            case SUBSCRIBE, UNSUBSCRIBE -> FrameCodec.topicHeader("sales");
+            case DELIVER -> FrameCodec.deliverHeader("sales", 0);
+            case ACK -> FrameCodec.brokerAckHeader("sales", 0, ConfirmationMode.BROKER, 0);
             case PING, PONG -> new byte[0];
             case ERROR -> FrameCodec.errorHeader("MALFORMED_FRAME", "bad");
         };

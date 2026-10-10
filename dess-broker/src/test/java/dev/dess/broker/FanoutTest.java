@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.Frame;
-import dev.dess.common.protocol.FrameCodec;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -206,7 +205,7 @@ class FanoutTest {
     private static void assertAck(ProtocolClient producer, String topic) throws Exception {
         Frame ack = producer.readFrame();
         assertEquals(Command.ACK, ack.command());
-        assertEquals(topic, FrameCodec.topic(ack.header()));
+        assertEquals(topic, producer.brokerAck(ack).topic());
     }
 
     private static void assertInRelativeOrder(List<String> received, String prefix) {

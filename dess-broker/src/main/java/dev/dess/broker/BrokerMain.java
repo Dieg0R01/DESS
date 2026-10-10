@@ -9,7 +9,7 @@ import java.util.List;
 
 public final class BrokerMain {
 
-    static final String USAGE = "Usage: dess-broker [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--log-level LEVEL]";
+    static final String USAGE = "Usage: dess-broker [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--max-in-flight N] [--topic-queue-capacity N] [--outbound-capacity N] [--slow-consumer-grace-ms N] [--publish-wait-ms N] [--ack-timeout-ms N] [--auto-create-topics true|false] [--topic NAME] [--log-level LEVEL]";
 
     private BrokerMain() {
     }
@@ -84,6 +84,14 @@ public final class BrokerMain {
             Integer maxConnections = null;
             Integer maxPayloadBytes = null;
             Integer idleTimeoutMillis = null;
+            Integer maxInFlight = null;
+            Integer topicQueueCapacity = null;
+            Integer outboundCapacity = null;
+            Integer slowConsumerGraceMillis = null;
+            Integer publishWaitMillis = null;
+            Integer ackTimeoutMillis = null;
+            Boolean autoCreateTopics = null;
+            List<String> topics = new ArrayList<>();
             String logLevel = null;
             for (int index = 0; index < args.length; index++) {
                 switch (args[index]) {
@@ -127,6 +135,88 @@ public final class BrokerMain {
                         }
                         index++;
                     }
+                    case "--max-in-flight" -> {
+                        if (maxInFlight != null) {
+                            return null;
+                        }
+                        maxInFlight = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                        if (maxInFlight == null) {
+                            return null;
+                        }
+                        index++;
+                    }
+                    case "--topic-queue-capacity" -> {
+                        if (topicQueueCapacity != null) {
+                            return null;
+                        }
+                        topicQueueCapacity = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                        if (topicQueueCapacity == null) {
+                            return null;
+                        }
+                        index++;
+                    }
+                    case "--outbound-capacity" -> {
+                        if (outboundCapacity != null) {
+                            return null;
+                        }
+                        outboundCapacity = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                        if (outboundCapacity == null) {
+                            return null;
+                        }
+                        index++;
+                    }
+                    case "--slow-consumer-grace-ms" -> {
+                        if (slowConsumerGraceMillis != null) {
+                            return null;
+                        }
+                        slowConsumerGraceMillis = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                        if (slowConsumerGraceMillis == null) {
+                            return null;
+                        }
+                        index++;
+                    }
+                    case "--publish-wait-ms" -> {
+                        if (publishWaitMillis != null) {
+                            return null;
+                        }
+                        publishWaitMillis = integer(value(args, index + 1), 0, Integer.MAX_VALUE);
+                        if (publishWaitMillis == null) {
+                            return null;
+                        }
+                        index++;
+                    }
+                    case "--ack-timeout-ms" -> {
+                        if (ackTimeoutMillis != null) {
+                            return null;
+                        }
+                        ackTimeoutMillis = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                        if (ackTimeoutMillis == null) {
+                            return null;
+                        }
+                        index++;
+                    }
+                    case "--auto-create-topics" -> {
+                        if (autoCreateTopics != null) {
+                            return null;
+                        }
+                        String raw = value(args, index + 1);
+                        if ("true".equals(raw)) {
+                            autoCreateTopics = true;
+                        } else if ("false".equals(raw)) {
+                            autoCreateTopics = false;
+                        } else {
+                            return null;
+                        }
+                        index++;
+                    }
+                    case "--topic" -> {
+                        String name = value(args, index + 1);
+                        if (name == null) {
+                            return null;
+                        }
+                        topics.add(name);
+                        index++;
+                    }
                     case "--log-level" -> {
                         if (logLevel != null) {
                             return null;
@@ -142,12 +232,24 @@ public final class BrokerMain {
                     }
                 }
             }
-            BrokerConfig config = new BrokerConfig(
-                    port == null ? BrokerConfig.DEFAULT_PORT : port,
-                    maxConnections == null ? BrokerConfig.DEFAULT_MAX_CONNECTIONS : maxConnections,
-                    maxPayloadBytes == null ? BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES : maxPayloadBytes,
-                    idleTimeoutMillis == null ? BrokerConfig.DEFAULT_IDLE_TIMEOUT_MILLIS : idleTimeoutMillis);
-            return new Request(config, logLevel == null ? "INFO" : logLevel);
+            try {
+                BrokerConfig config = new BrokerConfig(
+                        port == null ? BrokerConfig.DEFAULT_PORT : port,
+                        maxConnections == null ? BrokerConfig.DEFAULT_MAX_CONNECTIONS : maxConnections,
+                        maxPayloadBytes == null ? BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES : maxPayloadBytes,
+                        idleTimeoutMillis == null ? BrokerConfig.DEFAULT_IDLE_TIMEOUT_MILLIS : idleTimeoutMillis,
+                        maxInFlight == null ? BrokerConfig.DEFAULT_MAX_IN_FLIGHT : maxInFlight,
+                        topicQueueCapacity == null ? BrokerConfig.DEFAULT_TOPIC_QUEUE_CAPACITY : topicQueueCapacity,
+                        outboundCapacity == null ? BrokerConfig.DEFAULT_OUTBOUND_CAPACITY : outboundCapacity,
+                        slowConsumerGraceMillis == null ? BrokerConfig.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS : slowConsumerGraceMillis,
+                        publishWaitMillis == null ? BrokerConfig.DEFAULT_PUBLISH_WAIT_MILLIS : publishWaitMillis,
+                        ackTimeoutMillis == null ? BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS : ackTimeoutMillis,
+                        autoCreateTopics == null || autoCreateTopics,
+                        topics);
+                return new Request(config, logLevel == null ? "INFO" : logLevel);
+            } catch (IllegalArgumentException ex) {
+                return null;
+            }
         }
 
         private static String value(String[] args, int index) {

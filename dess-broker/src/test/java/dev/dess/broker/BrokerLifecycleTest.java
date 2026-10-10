@@ -38,7 +38,7 @@ class BrokerLifecycleTest {
                 socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 2_000);
             }
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofSeconds(2)) < 0);
-            assertEquals(1, logs.count("event=broker.started", "version=1", "tcpPort=" + broker.port()));
+            assertEquals(1, logs.count("event=broker.started", "version=2", "tcpPort=" + broker.port()));
         }
     }
 

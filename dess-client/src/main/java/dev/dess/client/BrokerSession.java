@@ -1,6 +1,7 @@
 package dev.dess.client;
 
 import dev.dess.common.protocol.Command;
+import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
@@ -46,7 +47,15 @@ public final class BrokerSession implements AutoCloseable {
     }
 
     public void publish(String topic, byte[] payload) throws IOException {
-        write(new Frame(Command.PUBLISH, FrameCodec.topicHeader(topic), payload));
+        publish(topic, payload, ConfirmationMode.BROKER);
+    }
+
+    public void publish(String topic, byte[] payload, ConfirmationMode mode) throws IOException {
+        write(new Frame(Command.PUBLISH, FrameCodec.publishHeader(topic, mode), payload));
+    }
+
+    public void acknowledge(String topic, long offset) throws IOException {
+        write(new Frame(Command.ACK, FrameCodec.clientAckHeader(topic, offset), new byte[0]));
     }
 
     public void subscribe(String topic) throws IOException {
