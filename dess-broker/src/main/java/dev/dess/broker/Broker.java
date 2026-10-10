@@ -13,8 +13,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +29,7 @@ public final class Broker implements AutoCloseable {
     private final Thread acceptThread;
     private final ExecutorService readers;
     private final ExecutorService writers;
+    private final ScheduledExecutorService flowTimer;
     private final TopicRegistry registry;
     private final ConcurrentHashMap<Long, ClientConnection> connections = new ConcurrentHashMap<>();
     private final Semaphore permits;
@@ -37,7 +40,12 @@ public final class Broker implements AutoCloseable {
 
     private Broker(BrokerConfig config) throws IOException {
         this.config = config;
-        this.registry = new TopicRegistry(config.topicQueueCapacity());
+        this.flowTimer = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "dess-flow-timer");
+            thread.setDaemon(false);
+            return thread;
+        });
+        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), this::scheduleLagCheck);
         this.permits = new Semaphore(config.maxConnections());
         this.serverSocket = bind(config.port());
         this.startedAt = System.nanoTime();
@@ -77,6 +85,65 @@ public final class Broker implements AutoCloseable {
 
     void forget(ClientConnection connection) {
         connections.remove(connection.id());
+    }
+
+    void scheduleLagCheck(Subscription subscription) {
+        schedule(config.slowConsumerGraceMillis(), () -> checkLag(subscription));
+    }
+
+    void watchWrite(ClientConnection connection) {
+        schedule(config.slowConsumerGraceMillis(), () -> checkWrite(connection));
+    }
+
+    private void checkLag(Subscription subscription) {
+        if (shuttingDown) {
+            return;
+        }
+        long graceNanos = TimeUnit.MILLISECONDS.toNanos(config.slowConsumerGraceMillis());
+        if (subscription.topic().graceElapsed(subscription, graceNanos)) {
+            subscription.connection().markSlow();
+        }
+    }
+
+    private void checkWrite(ClientConnection connection) {
+        if (shuttingDown || connection.isClosing()) {
+            connection.clearWriteWatch();
+            return;
+        }
+        long since = connection.writingSince();
+        if (since == 0L) {
+            connection.clearWriteWatch();
+            if (connection.writingSince() != 0L && connection.armWriteWatch()) {
+                watchWrite(connection);
+            }
+            return;
+        }
+        long graceMillis = config.slowConsumerGraceMillis();
+        long ageMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - since);
+        boolean full = connection.outboundFull();
+        if (ageMillis >= graceMillis && !full) {
+            connection.clearWriteWatch();
+            connection.forceCloseSlow();
+            return;
+        }
+        if (ageMillis >= graceMillis) {
+            connection.markSlow();
+        }
+        if (ageMillis >= graceMillis * 2L) {
+            connection.clearWriteWatch();
+            connection.forceCloseSlow();
+            return;
+        }
+        long remaining = Math.max(1L, (full ? graceMillis * 2L : graceMillis) - ageMillis);
+        schedule(remaining, () -> checkWrite(connection));
+    }
+
+    private void schedule(long delayMillis, Runnable task) {
+        try {
+            flowTimer.schedule(task, delayMillis, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException ex) {
+            // The timer is already shut down.
+        }
     }
 
     void startWriter(ClientConnection connection) {
@@ -119,8 +186,11 @@ public final class Broker implements AutoCloseable {
         }
         readers.shutdownNow();
         writers.shutdownNow();
+        flowTimer.shutdownNow();
         try {
-            if (!readers.awaitTermination(2, TimeUnit.SECONDS) || !writers.awaitTermination(2, TimeUnit.SECONDS)) {
+            if (!readers.awaitTermination(2, TimeUnit.SECONDS)
+                    || !writers.awaitTermination(2, TimeUnit.SECONDS)
+                    || !flowTimer.awaitTermination(2, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("Connection threads did not stop");
             }
         } catch (InterruptedException ex) {

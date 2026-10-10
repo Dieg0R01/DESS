@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ClientConnection implements Runnable {
 
@@ -54,27 +55,21 @@ public final class ClientConnection implements Runnable {
 
     private final ConnectionWriter writer = new ConnectionWriter(this);
 
-    private static final Object SEND_BUFFER = new Object();
-
-    private static int forcedSendBuffer;
-
     private volatile State state = State.HANDSHAKING;
 
     private volatile boolean closing;
 
+    private volatile boolean slow;
+
+    /** CLOSED, TIMEOUT, ERROR, or SLOW_CONSUMER. Shutdown is logged as SHUTDOWN. */
     private volatile String closeReason = "CLOSED";
 
     /** Zero while idle. {@link System#nanoTime()} while a delivery write is in progress. */
     private volatile long writingSince;
 
-    private boolean cleaned;
+    private final AtomicBoolean writeWatch = new AtomicBoolean();
 
-    /** Limits the send buffer of connections accepted while set. Zero clears the limit. */
-    static void forceSendBuffer(int bytes) {
-        synchronized (SEND_BUFFER) {
-            forcedSendBuffer = bytes;
-        }
-    }
+    private boolean cleaned;
 
     ClientConnection(long id, Socket socket, BrokerConfig config, TopicRegistry registry, Broker broker, Semaphore permits) throws IOException {
         this.id = id;
@@ -88,13 +83,6 @@ public final class ClientConnection implements Runnable {
         this.remoteAddress = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
         this.acceptedAt = Instant.now();
         socket.setTcpNoDelay(true);
-        int sendBuffer;
-        synchronized (SEND_BUFFER) {
-            sendBuffer = forcedSendBuffer;
-        }
-        if (sendBuffer > 0) {
-            socket.setSendBufferSize(sendBuffer);
-        }
     }
 
     public long id() {
@@ -125,12 +113,65 @@ public final class ClientConnection implements Runnable {
         return ready.poll(200, TimeUnit.MILLISECONDS);
     }
 
+    boolean isSlow() {
+        return slow;
+    }
+
+    void markSlow() {
+        slow = true;
+        if (!"SLOW_CONSUMER".equals(closeReason)) {
+            closeReason = "SLOW_CONSUMER";
+        }
+    }
+
+    long writingSince() {
+        return writingSince;
+    }
+
+    void clearWriteWatch() {
+        writeWatch.set(false);
+    }
+
+    boolean armWriteWatch() {
+        return writeWatch.compareAndSet(false, true);
+    }
+
+    boolean outboundFull() {
+        for (Subscription subscription : subscriptions.values()) {
+            if (subscription.topic().isFull(subscription)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void beginWriting() {
         writingSince = System.nanoTime();
+        if (armWriteWatch()) {
+            broker.watchWrite(this);
+        }
     }
 
     void endWriting() {
         writingSince = 0L;
+    }
+
+    void failSlow() {
+        markSlow();
+        beginWriting();
+        try {
+            writeFrame(ConnectionWriter.slowError());
+        } catch (IOException ex) {
+            // The error frame could not be written; the socket is closed below.
+        } finally {
+            endWriting();
+        }
+        cleanup();
+    }
+
+    void forceCloseSlow() {
+        markSlow();
+        cleanup();
     }
 
     @Override

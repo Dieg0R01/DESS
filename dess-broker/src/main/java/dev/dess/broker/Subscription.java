@@ -16,6 +16,9 @@ final class Subscription {
     /** Guarded by the topic lock. */
     private boolean active = true;
 
+    /** Guarded by the topic lock. Zero while the outbound window is below capacity. */
+    private long fullSince;
+
     /** True while this subscription is queued for its writer or being written. */
     private final AtomicBoolean scheduled = new AtomicBoolean();
 
@@ -52,6 +55,22 @@ final class Subscription {
 
     void deactivate() {
         active = false;
+    }
+
+    boolean markFull(long now) {
+        if (fullSince != 0) {
+            return false;
+        }
+        fullSince = now == 0L ? 1L : now;
+        return true;
+    }
+
+    void clearFull() {
+        fullSince = 0L;
+    }
+
+    long fullSince() {
+        return fullSince;
     }
 
     boolean trySchedule() {

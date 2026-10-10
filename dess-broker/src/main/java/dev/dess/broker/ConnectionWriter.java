@@ -1,5 +1,9 @@
 package dev.dess.broker;
 
+import dev.dess.common.protocol.Command;
+import dev.dess.common.protocol.ErrorCode;
+import dev.dess.common.protocol.Frame;
+import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
 
 final class ConnectionWriter implements Runnable {
@@ -15,6 +19,10 @@ final class ConnectionWriter implements Runnable {
         Thread.currentThread().setName("dess-writer-" + connection.id());
         try {
             while (!connection.isClosing()) {
+                if (connection.isSlow()) {
+                    connection.failSlow();
+                    return;
+                }
                 Subscription subscription = connection.pollReady();
                 if (subscription != null) {
                     deliver(subscription);
@@ -26,6 +34,10 @@ final class ConnectionWriter implements Runnable {
     }
 
     private void deliver(Subscription subscription) {
+        if (connection.isSlow()) {
+            connection.failSlow();
+            return;
+        }
         Topic topic = subscription.topic();
         Topic.Delivery delivery = topic.claim(subscription);
         if (delivery == null) {
@@ -41,6 +53,14 @@ final class ConnectionWriter implements Runnable {
         } finally {
             connection.endWriting();
         }
+        if (connection.isSlow()) {
+            connection.failSlow();
+            return;
+        }
         topic.advance(subscription);
+    }
+
+    static Frame slowError() {
+        return new Frame(Command.ERROR, FrameCodec.errorHeader(ErrorCode.SLOW_CONSUMER.name(), "slow consumer"), new byte[0]);
     }
 }

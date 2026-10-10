@@ -4,19 +4,26 @@ import dev.dess.common.logging.Logging;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 public final class TopicRegistry {
 
     private final int topicQueueCapacity;
 
+    private final int outboundCapacity;
+
+    private final Consumer<Subscription> onFull;
+
     private final ConcurrentHashMap<String, Topic> topics = new ConcurrentHashMap<>();
 
-    public TopicRegistry(int topicQueueCapacity) {
+    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, Consumer<Subscription> onFull) {
         this.topicQueueCapacity = topicQueueCapacity;
+        this.outboundCapacity = outboundCapacity;
+        this.onFull = onFull;
     }
 
     public Topic open(String name) {
-        return topics.computeIfAbsent(name, topic -> new Topic(topic, topicQueueCapacity));
+        return topics.computeIfAbsent(name, topic -> new Topic(topic, topicQueueCapacity, outboundCapacity, onFull));
     }
 
     public void subscribe(ClientConnection connection, String name) {

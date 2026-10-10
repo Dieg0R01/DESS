@@ -1,16 +1,23 @@
 package dev.dess.broker;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
 final class Topic {
 
     private final String name;
 
     private final int capacity;
+
+    private final int outboundCapacity;
+
+    private final Consumer<Subscription> onFull;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -29,9 +36,11 @@ final class Topic {
     /** Guarded by {@link #lock}. */
     private final Map<Long, Subscription> subscriptions = new HashMap<>();
 
-    Topic(String name, int capacity) {
+    Topic(String name, int capacity, int outboundCapacity, Consumer<Subscription> onFull) {
         this.name = name;
         this.capacity = capacity;
+        this.outboundCapacity = outboundCapacity;
+        this.onFull = onFull;
     }
 
     String name() {
@@ -79,6 +88,8 @@ final class Topic {
     }
 
     OptionalLong append(long publisherId, byte[] payload, long deadlineNanos) throws InterruptedException {
+        List<Subscription> becameFull = new ArrayList<>();
+        OptionalLong accepted;
         lock.lock();
         try {
             while (ring != null && nextOffset - baseOffset == capacity) {
@@ -88,7 +99,30 @@ final class Topic {
                 }
                 notFull.awaitNanos(waiting);
             }
-            return OptionalLong.of(accept(publisherId, payload));
+            accepted = OptionalLong.of(accept(publisherId, payload, becameFull));
+        } finally {
+            lock.unlock();
+        }
+        for (Subscription subscription : becameFull) {
+            onFull.accept(subscription);
+        }
+        return accepted;
+    }
+
+    boolean graceElapsed(Subscription subscription, long graceNanos) {
+        lock.lock();
+        try {
+            long since = subscription.fullSince();
+            return subscription.isActive() && since != 0L && System.nanoTime() - since >= graceNanos;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    boolean isFull(Subscription subscription) {
+        lock.lock();
+        try {
+            return subscription.fullSince() != 0L;
         } finally {
             lock.unlock();
         }
@@ -132,6 +166,9 @@ final class Topic {
             if (entry != null) {
                 release(entry);
             }
+            if (nextOffset - subscription.cursor() < outboundCapacity) {
+                subscription.clearFull();
+            }
             reclaim();
             if (subscription.cursor() < nextOffset) {
                 subscription.connection().enqueue(subscription);
@@ -144,7 +181,7 @@ final class Topic {
         }
     }
 
-    private long accept(long publisherId, byte[] payload) {
+    private long accept(long publisherId, byte[] payload, List<Subscription> becameFull) {
         if (ring == null) {
             ring = new Entry[capacity];
         }
@@ -156,8 +193,12 @@ final class Topic {
             reclaim();
             return offset;
         }
+        long now = System.nanoTime();
         for (Subscription subscription : subscriptions.values()) {
             markReady(subscription);
+            if (nextOffset - subscription.cursor() >= outboundCapacity && subscription.markFull(now)) {
+                becameFull.add(subscription);
+            }
         }
         return offset;
     }
