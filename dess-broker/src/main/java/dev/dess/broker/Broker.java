@@ -30,6 +30,7 @@ public final class Broker implements AutoCloseable {
     private final ExecutorService readers;
     private final ExecutorService writers;
     private final ScheduledExecutorService flowTimer;
+    private final FlowControl flow;
     private final TopicRegistry registry;
     private final ConcurrentHashMap<Long, ClientConnection> connections = new ConcurrentHashMap<>();
     private final Semaphore permits;
@@ -45,7 +46,8 @@ public final class Broker implements AutoCloseable {
             thread.setDaemon(false);
             return thread;
         });
-        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), this::scheduleLagCheck);
+        this.flow = new FlowControl(config.maxInFlight());
+        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, this::scheduleLagCheck);
         this.permits = new Semaphore(config.maxConnections());
         this.serverSocket = bind(config.port());
         this.startedAt = System.nanoTime();
@@ -70,6 +72,18 @@ public final class Broker implements AutoCloseable {
 
     public static Broker start(BrokerConfig config) throws IOException {
         return new Broker(config);
+    }
+
+    public int inFlightPeak() {
+        return flow.inFlightPeak();
+    }
+
+    public int inFlight() {
+        return flow.inFlight();
+    }
+
+    FlowControl flow() {
+        return flow;
     }
 
     public int port() {
@@ -181,6 +195,7 @@ public final class Broker implements AutoCloseable {
         if (acceptThread.isAlive()) {
             throw new IllegalStateException("Accept thread " + acceptThread.getName() + " did not stop");
         }
+        int inFlightLost = flow.inFlight();
         for (ClientConnection connection : List.copyOf(connections.values())) {
             connection.cleanup();
         }
@@ -201,10 +216,11 @@ public final class Broker implements AutoCloseable {
         Map<String, String> stopped = new LinkedHashMap<>();
         stopped.put("uptimeSeconds", Long.toString(uptimeSeconds));
         stopped.put("reason", reason);
+        stopped.put("inFlightLost", Integer.toString(inFlightLost));
         Logging.event("dev.dess.broker", "broker.stopped", stopped);
         if ("SIGNAL".equals(reason)) {
             // Signal shutdown closes the log handlers, so this line is written directly.
-            System.out.println(Logging.format("INFO", "dev.dess.broker", "event=broker.stopped uptimeSeconds=" + uptimeSeconds + " reason=" + reason));
+            System.out.println(Logging.format("INFO", "dev.dess.broker", "event=broker.stopped uptimeSeconds=" + uptimeSeconds + " reason=" + reason + " inFlightLost=" + inFlightLost));
             System.out.flush();
         }
     }

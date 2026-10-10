@@ -12,18 +12,21 @@ public final class TopicRegistry {
 
     private final int outboundCapacity;
 
+    private final FlowControl flow;
+
     private final Consumer<Subscription> onFull;
 
     private final ConcurrentHashMap<String, Topic> topics = new ConcurrentHashMap<>();
 
-    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, Consumer<Subscription> onFull) {
+    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, Consumer<Subscription> onFull) {
         this.topicQueueCapacity = topicQueueCapacity;
         this.outboundCapacity = outboundCapacity;
+        this.flow = flow;
         this.onFull = onFull;
     }
 
     public Topic open(String name) {
-        return topics.computeIfAbsent(name, topic -> new Topic(topic, topicQueueCapacity, outboundCapacity, onFull));
+        return topics.computeIfAbsent(name, topic -> new Topic(topic, topicQueueCapacity, outboundCapacity, flow, onFull));
     }
 
     public void subscribe(ClientConnection connection, String name) {

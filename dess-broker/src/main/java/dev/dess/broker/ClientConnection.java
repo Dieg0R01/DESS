@@ -21,7 +21,6 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
@@ -346,21 +345,42 @@ public final class ClientConnection implements Runnable {
             return;
         }
         Topic channel = registry.open(topic);
-        OptionalLong accepted;
+        FlowControl flow = broker.flow();
+        long started = System.nanoTime();
+        long deadline = started + TimeUnit.MILLISECONDS.toNanos(config.publishWaitMillis());
+        boolean waited = false;
+        boolean acquired = false;
+        Topic.AppendResult accepted;
         try {
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.publishWaitMillis());
+            if (!flow.tryAcquireNow()) {
+                waited = true;
+                if (!flow.acquireUntil(deadline)) {
+                    flow.throttled(System.nanoTime() - started, false);
+                    reject(topic, ErrorCode.BROKER_BUSY, "broker is busy");
+                    return;
+                }
+            }
+            acquired = true;
             accepted = channel.append(id, payload, deadline);
         } catch (InterruptedException ex) {
+            if (acquired) {
+                flow.release();
+            }
             Thread.currentThread().interrupt();
             closing = true;
             state = State.CLOSING;
             return;
         }
-        if (accepted.isEmpty()) {
+        if (!accepted.accepted()) {
+            flow.release();
+            flow.throttled(System.nanoTime() - started, false);
             reject(topic, ErrorCode.BROKER_BUSY, "broker is busy");
             return;
         }
-        long offset = accepted.getAsLong();
+        if (waited || accepted.waited()) {
+            flow.throttled(System.nanoTime() - started, true);
+        }
+        long offset = accepted.offset();
         writeFrame(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, offset, ConfirmationMode.BROKER, 0), new byte[0]));
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("topic", topic);

@@ -33,6 +33,14 @@ public final class BrokerHarness implements AutoCloseable {
         return broker.port();
     }
 
+    public int inFlight() {
+        return broker.inFlight();
+    }
+
+    public int inFlightPeak() {
+        return broker.inFlightPeak();
+    }
+
     @Override
     public void close() {
         broker.close();

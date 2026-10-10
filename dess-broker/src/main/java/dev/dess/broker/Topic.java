@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -18,6 +17,8 @@ final class Topic {
     private final int outboundCapacity;
 
     private final Consumer<Subscription> onFull;
+
+    private final FlowControl flow;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -36,10 +37,11 @@ final class Topic {
     /** Guarded by {@link #lock}. */
     private final Map<Long, Subscription> subscriptions = new HashMap<>();
 
-    Topic(String name, int capacity, int outboundCapacity, Consumer<Subscription> onFull) {
+    Topic(String name, int capacity, int outboundCapacity, FlowControl flow, Consumer<Subscription> onFull) {
         this.name = name;
         this.capacity = capacity;
         this.outboundCapacity = outboundCapacity;
+        this.flow = flow;
         this.onFull = onFull;
     }
 
@@ -87,19 +89,21 @@ final class Topic {
         }
     }
 
-    OptionalLong append(long publisherId, byte[] payload, long deadlineNanos) throws InterruptedException {
+    AppendResult append(long publisherId, byte[] payload, long deadlineNanos) throws InterruptedException {
         List<Subscription> becameFull = new ArrayList<>();
-        OptionalLong accepted;
+        AppendResult accepted;
         lock.lock();
         try {
+            boolean waited = false;
             while (ring != null && nextOffset - baseOffset == capacity) {
+                waited = true;
                 long waiting = deadlineNanos - System.nanoTime();
                 if (waiting <= 0) {
-                    return OptionalLong.empty();
+                    return AppendResult.rejected();
                 }
                 notFull.awaitNanos(waiting);
             }
-            accepted = OptionalLong.of(accept(publisherId, payload, becameFull));
+            accepted = new AppendResult(accept(publisherId, payload, becameFull), waited);
         } finally {
             lock.unlock();
         }
@@ -191,6 +195,7 @@ final class Topic {
         if (entry.remaining == 0) {
             entry.payload = null;
             reclaim();
+            flow.release();
             return offset;
         }
         long now = System.nanoTime();
@@ -222,6 +227,7 @@ final class Topic {
         entry.remaining--;
         if (entry.remaining == 0) {
             entry.payload = null;
+            flow.release();
         }
     }
 
@@ -252,6 +258,43 @@ final class Topic {
 
     private int index(long offset) {
         return (int) (offset % capacity);
+    }
+
+    static final class AppendResult {
+
+        private final long offset;
+
+        private final boolean accepted;
+
+        private final boolean waited;
+
+        private AppendResult(long offset, boolean waited) {
+            this.offset = offset;
+            this.accepted = true;
+            this.waited = waited;
+        }
+
+        private AppendResult() {
+            this.offset = -1;
+            this.accepted = false;
+            this.waited = true;
+        }
+
+        static AppendResult rejected() {
+            return new AppendResult();
+        }
+
+        boolean accepted() {
+            return accepted;
+        }
+
+        long offset() {
+            return offset;
+        }
+
+        boolean waited() {
+            return waited;
+        }
     }
 
     static final class Delivery {
