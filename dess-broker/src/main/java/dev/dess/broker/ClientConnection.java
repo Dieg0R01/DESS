@@ -18,13 +18,14 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.OptionalLong;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 public final class ClientConnection implements Runnable {
 
@@ -46,15 +47,26 @@ public final class ClientConnection implements Runnable {
     private final Instant acceptedAt;
     private final Object outputLock = new Object();
 
-    /** Guarded by itself. */
-    private final Set<String> subscriptionNames = new HashSet<>();
+    /** Concurrent map of topics this connection is on. */
+    private final Map<String, Subscription> subscriptions = new ConcurrentHashMap<>();
+
+    private final LinkedBlockingQueue<Subscription> ready = new LinkedBlockingQueue<>();
+
+    private final ConnectionWriter writer = new ConnectionWriter(this);
 
     private static final Object SEND_BUFFER = new Object();
 
     private static int forcedSendBuffer;
 
     private volatile State state = State.HANDSHAKING;
+
+    private volatile boolean closing;
+
     private volatile String closeReason = "CLOSED";
+
+    /** Zero while idle. {@link System#nanoTime()} while a delivery write is in progress. */
+    private volatile long writingSince;
+
     private boolean cleaned;
 
     /** Limits the send buffer of connections accepted while set. Zero clears the limit. */
@@ -87,6 +99,38 @@ public final class ClientConnection implements Runnable {
 
     public long id() {
         return id;
+    }
+
+    boolean isClosing() {
+        return closing;
+    }
+
+    Runnable writer() {
+        return writer;
+    }
+
+    void remember(Subscription subscription) {
+        subscriptions.put(subscription.topic().name(), subscription);
+    }
+
+    void forget(String topic) {
+        subscriptions.remove(topic);
+    }
+
+    void enqueue(Subscription subscription) {
+        ready.offer(subscription);
+    }
+
+    Subscription pollReady() throws InterruptedException {
+        return ready.poll(200, TimeUnit.MILLISECONDS);
+    }
+
+    void beginWriting() {
+        writingSince = System.nanoTime();
+    }
+
+    void endWriting() {
+        writingSince = 0L;
     }
 
     @Override
@@ -127,23 +171,30 @@ public final class ClientConnection implements Runnable {
     }
 
     void writeDeliver(String topic, long offset, byte[] payload) throws IOException {
-        if (state == State.CLOSING) {
+        if (closing || state == State.CLOSING) {
             throw new IOException("connection is closing");
         }
         writeFrame(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset), payload));
     }
 
     void cleanup() {
+        closing = true;
+        List<Subscription> owned = List.copyOf(subscriptions.values());
+        subscriptions.clear();
+        boolean first;
         synchronized (this) {
-            if (cleaned) {
-                return;
-            }
+            first = !cleaned;
             cleaned = true;
-            state = State.CLOSING;
-            permits.release();
+            if (first) {
+                state = State.CLOSING;
+                permits.release();
+            }
         }
-        for (String name : names()) {
-            registry.remove(this, name, "DISCONNECT");
+        for (Subscription subscription : owned) {
+            registry.remove(this, subscription.topic().name(), "DISCONNECT");
+        }
+        if (!first) {
+            return;
         }
         closeSocket();
         broker.forget(this);
@@ -199,6 +250,7 @@ public final class ClientConnection implements Runnable {
         properties.put("remoteAddress", remoteAddress);
         properties.put("protocolVersion", Integer.toString(FrameCodec.PROTOCOL_VERSION));
         Logging.event("dev.dess.broker", "client.connected", properties);
+        broker.startWriter(this);
     }
 
     private void subscribe(Frame frame) throws IOException {
@@ -211,9 +263,6 @@ public final class ClientConnection implements Runnable {
             return;
         }
         registry.subscribe(this, topic);
-        synchronized (subscriptionNames) {
-            subscriptionNames.add(topic);
-        }
     }
 
     private void unsubscribe(Frame frame) throws IOException {
@@ -226,9 +275,6 @@ public final class ClientConnection implements Runnable {
             return;
         }
         registry.remove(this, topic, "UNSUBSCRIBE");
-        synchronized (subscriptionNames) {
-            subscriptionNames.remove(topic);
-        }
     }
 
     private void publish(Frame frame) throws IOException {
@@ -258,29 +304,22 @@ public final class ClientConnection implements Runnable {
             reject(topic, ErrorCode.PAYLOAD_TOO_LARGE, "payload is too large");
             return;
         }
-        long offset;
-        List<ClientConnection> failed = new ArrayList<>();
-        while (true) {
-            TopicRegistry.Topic channel = registry.open(topic);
-            synchronized (channel) {
-                if (!registry.isCurrent(channel)) {
-                    continue;
-                }
-                offset = channel.takeOffset();
-                for (ClientConnection subscriber : channel.snapshot()) {
-                    try {
-                        subscriber.writeDeliver(topic, offset, payload);
-                    } catch (IOException ex) {
-                        failed.add(subscriber);
-                        registry.remove(subscriber, topic, "DISCONNECT");
-                    }
-                }
-                break;
-            }
+        Topic channel = registry.open(topic);
+        OptionalLong accepted;
+        try {
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.publishWaitMillis());
+            accepted = channel.append(id, payload, deadline);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            closing = true;
+            state = State.CLOSING;
+            return;
         }
-        for (ClientConnection subscriber : failed) {
-            subscriber.cleanup();
+        if (accepted.isEmpty()) {
+            reject(topic, ErrorCode.BROKER_BUSY, "broker is busy");
+            return;
         }
+        long offset = accepted.getAsLong();
         writeFrame(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, offset, ConfirmationMode.BROKER, 0), new byte[0]));
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("topic", topic);
@@ -321,6 +360,7 @@ public final class ClientConnection implements Runnable {
     }
 
     private void fail(ErrorCode code, String reason) throws IOException {
+        closing = true;
         closeReason = "ERROR";
         writeError(code, reason);
         state = State.CLOSING;
@@ -352,9 +392,4 @@ public final class ClientConnection implements Runnable {
         }
     }
 
-    private List<String> names() {
-        synchronized (subscriptionNames) {
-            return List.copyOf(subscriptionNames);
-        }
-    }
 }

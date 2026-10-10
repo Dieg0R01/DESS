@@ -88,60 +88,51 @@ class FanoutTest {
     }
 
     @Test
-    void failedSubscriberIsClosedAndTheOtherStillReceives() throws Exception {
+    void stalledSubscriberDoesNotDelayAcknowledgements() throws Exception {
         try (LogCapture logs = LogCapture.open();
                 BrokerHarness harness = BrokerHarness.start();
                 ProtocolClient producer = ProtocolClient.connect(harness.port());
-                ProtocolClient healthy = ProtocolClient.connect(harness.port())) {
-            ClientConnection.forceSendBuffer(1024);
-            try {
-                try (ProtocolClient failing = ProtocolClient.connect(harness.port())) {
-                failing.setReadTimeoutMillis(5_000);
-                failing.hello();
-                ClientConnection.forceSendBuffer(0);
-                arm(producer, healthy);
-                healthy.subscribe("sales");
-                failing.subscribe("sales");
-                awaitSubscribed(logs, List.of(healthy, failing), "sales");
-                failing.shrinkReceiveBuffer(1024);
-
-                byte[] payload = new byte[512 * 1024];
-                payload[0] = 7;
-                AtomicReference<Frame> delivered = new AtomicReference<>();
-                AtomicReference<Throwable> readerFailure = new AtomicReference<>();
-                Thread reader = new Thread(() -> {
-                    try {
-                        healthy.setReadTimeoutMillis(5_000);
-                        delivered.set(healthy.readFrame());
-                    } catch (Throwable ex) {
-                        readerFailure.set(ex);
-                    }
-                });
-                reader.start();
+                ProtocolClient healthy = ProtocolClient.connect(harness.port());
+                ProtocolClient stalled = ProtocolClient.connect(harness.port())) {
+            arm(producer, healthy, stalled);
+            healthy.subscribe("sales");
+            stalled.subscribe("sales");
+            awaitSubscribed(logs, List.of(healthy, stalled), "sales");
+            healthy.setReadTimeoutMillis(10_000);
+            List<byte[]> payloads = new ArrayList<>();
+            AtomicReference<Throwable> readerFailure = new AtomicReference<>();
+            Thread reader = new Thread(() -> {
                 try {
-                    producer.publish("sales", payload);
-                    producer.setReadTimeoutMillis(300);
-                    try {
-                        producer.readFrame();
-                        throw new AssertionError("delivery did not block on the stalled subscriber");
-                    } catch (SocketTimeoutException blocked) {
-                        failing.abort();
-                        producer.setReadTimeoutMillis(5_000);
-                        assertAck(producer, "sales");
+                    for (int index = 0; index < 100; index++) {
+                        Frame delivered = healthy.readFrame();
+                        assertEquals(Command.DELIVER, delivered.command());
+                        payloads.add(delivered.payload());
                     }
-                } finally {
-                    reader.join(5_000);
+                } catch (Throwable ex) {
+                    readerFailure.set(ex);
                 }
-                assertTrue(readerFailure.get() == null, () -> String.valueOf(readerFailure.get()));
-                Frame frame = delivered.get();
-                assertEquals(Command.DELIVER, frame.command());
-                assertArrayEquals(payload, frame.payload());
-                producer.setReadTimeoutMillis(200);
-                assertThrows(SocketTimeoutException.class, producer::readFrame);
+            });
+            reader.start();
+            try {
+                producer.setReadTimeoutMillis(2_000);
+                for (int index = 0; index < 100; index++) {
+                    byte[] payload = new byte[64 * 1024];
+                    payload[0] = (byte) index;
+                    payload[1] = (byte) (index >>> 8);
+                    producer.publish("sales", payload);
+                    assertAck(producer, "sales");
                 }
             } finally {
-                ClientConnection.forceSendBuffer(0);
+                reader.join(20_000);
             }
+            assertTrue(readerFailure.get() == null, () -> String.valueOf(readerFailure.get()));
+            assertEquals(100, payloads.size());
+            for (int index = 0; index < payloads.size(); index++) {
+                assertEquals(64 * 1024, payloads.get(index).length);
+                assertEquals((byte) index, payloads.get(index)[0]);
+                assertEquals((byte) (index >>> 8), payloads.get(index)[1]);
+            }
+            stalled.abort();
         }
     }
 

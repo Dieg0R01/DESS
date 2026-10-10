@@ -1,0 +1,64 @@
+package dev.dess.broker;
+
+import java.util.concurrent.atomic.AtomicBoolean;
+
+final class Subscription {
+
+    private final ClientConnection connection;
+
+    private final Topic topic;
+
+    private final long subscribedAt;
+
+    /** Guarded by the topic lock. */
+    private long cursor;
+
+    /** Guarded by the topic lock. */
+    private boolean active = true;
+
+    /** True while this subscription is queued for its writer or being written. */
+    private final AtomicBoolean scheduled = new AtomicBoolean();
+
+    Subscription(ClientConnection connection, Topic topic, long subscribedAt) {
+        this.connection = connection;
+        this.topic = topic;
+        this.subscribedAt = subscribedAt;
+        this.cursor = subscribedAt;
+    }
+
+    ClientConnection connection() {
+        return connection;
+    }
+
+    Topic topic() {
+        return topic;
+    }
+
+    long subscribedAt() {
+        return subscribedAt;
+    }
+
+    long cursor() {
+        return cursor;
+    }
+
+    void advanceCursor() {
+        cursor++;
+    }
+
+    boolean isActive() {
+        return active;
+    }
+
+    void deactivate() {
+        active = false;
+    }
+
+    boolean trySchedule() {
+        return scheduled.compareAndSet(false, true);
+    }
+
+    void clearScheduled() {
+        scheduled.set(false);
+    }
+}
