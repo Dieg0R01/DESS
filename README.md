@@ -8,7 +8,7 @@ DESS is a small event streaming platform inspired by the architecture of systems
 
 The goal is not to compete with production brokers, but to implement by hand — on top of the JDK — the building blocks that a distributed system relies on: networking over TCP and UDP, multithreading and synchronization, durable storage, XML configuration, TLS encryption, message integrity and a web management interface.
 
-> **Status:** protocol version 1 is implemented: a plain-TCP broker with `produce` and `consume`. TLS, UDP discovery, XML configuration and the admin API remain the target architecture.
+> **Status:** protocol version 2 is implemented: a plain-TCP broker with `produce` and `consume`. Messages stay in memory for the life of the process. The durable log, TLS, UDP discovery, XML configuration and the admin API remain the target architecture.
 
 ---
 
@@ -160,7 +160,7 @@ sequenceDiagram
 
 ## Wire protocol
 
-Protocol version 1 is a binary framing on plain TCP. Integers are big-endian and there is no padding. One frame is one record:
+Protocol version 2 is a binary framing on plain TCP. Integers are big-endian and there is no padding. One frame is one record:
 
 ```text
 uint32 frameLength
@@ -171,27 +171,52 @@ uint32 payloadLength
 byte   payload[payloadLength]
 ```
 
-`frameLength` counts every byte after itself and equals `7 + headerLength + payloadLength`. The header is at most 1024 bytes. The payload is at most the configured maximum, 1048576 bytes by default, and is opaque: every byte is kept. A frame longer than 16 MiB + 1031 bytes is rejected.
+`frameLength` counts every byte after itself and equals `7 + headerLength + payloadLength`. The header is at most 1024 bytes and must be exactly the fields its command lists. The payload is at most the configured maximum, 1048576 bytes by default, and is opaque: every byte is kept. A frame longer than 16 MiB + 1031 bytes is rejected.
 
-Version 1 carries only the fields below. It has no offset, digest, confirmation mode or start position.
+A topic is a `uint16` length followed by that many UTF-8 bytes. The name matches `[a-z0-9][a-z0-9._-]{0,63}`. An offset is a `uint64`, the per-topic position assigned when the message is accepted, starting at 0 for each topic. A confirmation mode is a `uint8`: `0` is `BROKER` and `1` is `ALL`. A count is a `uint32`. An error header is a `uint16` code length, the ASCII code, a `uint16` reason length and the UTF-8 reason. A header of the wrong shape, an empty client `ACK`, or a mode byte other than 0 or 1 is `MALFORMED_FRAME` and the connection closes.
 
 | Code | Command | Direction | Header | Payload |
 |------|---------|-----------|--------|---------|
-| 1 | `HELLO` | both | `uint16` version, only version 1 | empty |
-| 2 | `PUBLISH` | client → broker | topic | message bytes |
+| 1 | `HELLO` | both | `uint16` version, only version 2 | empty |
+| 2 | `PUBLISH` | client → broker | topic, mode | message bytes |
 | 3 | `SUBSCRIBE` | client → broker | topic | empty |
 | 4 | `UNSUBSCRIBE` | client → broker | topic | empty |
-| 5 | `DELIVER` | broker → client | topic | the same message bytes |
-| 6 | `ACK` | both | empty from the client; topic from the broker | empty |
+| 5 | `DELIVER` | broker → client | topic, offset | the same message bytes |
+| 6 | `ACK` | broker → client | topic, offset, mode, acknowledgement count | empty |
+| 6 | `ACK` | client → broker | topic, offset | empty |
 | 7 | `PING` | client → broker | empty | empty |
 | 8 | `PONG` | broker → client | empty | empty |
-| 9 | `ERROR` | broker → client | error code and reason | empty |
+| 9 | `ERROR` | broker → client | error code and reason; `ACK_TIMEOUT` also carries topic, offset, expected count and received count | empty |
 
-A topic header is a `uint16` length followed by that many UTF-8 bytes. The name matches `[a-z0-9][a-z0-9._-]{0,63}`. An error header is a `uint16` code length, the ASCII code, a `uint16` reason length and the UTF-8 reason.
+The client's first frame is `HELLO` version 2. The broker answers with `HELLO` version 2. Any other first command is `HANDSHAKE_REQUIRED` and the connection closes. A `HELLO` for any version other than 2, version 1 included, is `UNSUPPORTED_VERSION` and the connection closes. A second `HELLO` is `MALFORMED_FRAME`.
 
-The client's first frame is `HELLO` version 1. The broker answers with `HELLO` version 1. `SUBSCRIBE` and `UNSUBSCRIBE` have no reply on success. Each accepted `PUBLISH` is answered with one `ACK`; a rejection is one `ERROR`. The client sends `PING` and the broker answers `PONG`.
+`SUBSCRIBE` and `UNSUBSCRIBE` have no reply on success. `UNSUBSCRIBE` of an unknown topic is also silent and does not create the topic. A connection may subscribe to any number of topics. Subscribing twice still delivers one copy. Each subscriber receives `DELIVER` frames for one topic in offset order, each exactly once. Frames from different topics on the same connection may interleave; there is no order across topics.
 
-UDP discovery and TLS are part of the target architecture. They are not part of version 1.
+Each accepted `PUBLISH` is answered with one `ACK` or one `ERROR`, never both, and never a reply for a later publish first. In mode `BROKER` the acknowledgement is sent as soon as the message is accepted, with `acknowledgements` 0, whatever the subscribers' pace. In mode `ALL` the broker waits until every subscriber that was registered at acceptance — except the publishing connection — has sent a client `ACK` for that offset. The acknowledgement then carries mode `ALL` and the number of subscribers that did. A subscriber that disconnects during the wait stops counting. With nobody expected, the acknowledgement is immediate and the count is 0. If the wait expires first, the reply is `ACK_TIMEOUT` and the connection stays open.
+
+A consumer acknowledges a delivery with a client `ACK` carrying that topic and offset. Only acknowledgements of `ALL` publishes change a reply. An acknowledgement for a topic the client is not on, or for an offset that client was not delivered, is ignored, logged as a warning, and the connection stays open. A repeated acknowledgement counts once.
+
+The client sends `PING` and the broker answers `PONG`. A command byte outside 1–9 is `UNKNOWN_COMMAND` and the connection stays open.
+
+| Code | When | Connection |
+|------|------|------------|
+| `MALFORMED_FRAME` | Header of the wrong shape, empty client `ACK`, or unknown mode byte | Closed |
+| `UNKNOWN_COMMAND` | Command byte is not 1–9 | Open |
+| `UNSUPPORTED_VERSION` | `HELLO` version is not 2 | Closed |
+| `HANDSHAKE_REQUIRED` | First frame is not `HELLO` | Closed |
+| `PAYLOAD_TOO_LARGE` | Payload exceeds the configured maximum. A frame past the 16 MiB ceiling is also rejected and closes the connection | Open when the payload was read and discarded |
+| `INVALID_TOPIC_NAME` | Topic text breaks the naming rule | Open |
+| `BROKER_BUSY` | Connection limit reached while accepting | Closed |
+| `BROKER_BUSY` | In-flight limit or topic queue still full after the publish wait | Open |
+| `UNKNOWN_TOPIC` | Topic does not exist and auto-creation is disabled | Open |
+| `SLOW_CONSUMER` | Outbound buffer stayed full beyond the grace period | Closed |
+| `ACK_TIMEOUT` | An `ALL` publish was not fully acknowledged in time | Open |
+
+When the broker-wide in-flight limit is reached, or a topic's queue is full, a publish waits up to the configured publish wait. If room appears, it is accepted. Otherwise the reply is `BROKER_BUSY` and the connection stays open. A message is in flight from acceptance until it has been written to every subscriber that was present then and is still connected. A subscriber whose outbound buffer stays full beyond the grace period receives `SLOW_CONSUMER` and the connection closes.
+
+With auto-creation enabled, the first valid `PUBLISH` or `SUBSCRIBE` on an unknown name creates the topic. With it disabled, both commands receive `UNKNOWN_TOPIC` and the connection stays open. A topic exists until the broker stops. Offsets on a topic keep increasing for that lifetime.
+
+UDP discovery and TLS are part of the target architecture. They are not part of version 2.
 
 ---
 
@@ -307,10 +332,10 @@ java -jar dess-broker/target/dess-broker.jar --port 55123
 ```
 
 ```text
-Usage: dess-broker [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--log-level LEVEL]
+Usage: dess-broker [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--max-in-flight N] [--topic-queue-capacity N] [--outbound-capacity N] [--slow-consumer-grace-ms N] [--publish-wait-ms N] [--ack-timeout-ms N] [--auto-create-topics true|false] [--topic NAME] [--log-level LEVEL]
 ```
 
-The defaults are port `55123`, 128 connections, 1048576-byte payloads and a 30000 ms idle timeout. Port `0` lets the operating system choose. `--help` and `-h` print the name, version and usage, then exit 0.
+The defaults are port `55123`, 128 connections, 1048576-byte payloads, a 30000 ms idle timeout, 10000 messages in flight, a topic queue of 1024, an outbound window of 256, a 2000 ms slow-consumer grace, a 1000 ms publish wait, a 5000 ms acknowledgement timeout, and auto-creation on. Port `0` lets the operating system choose. `--topic` may be repeated; each name is created at startup. `--outbound-capacity` cannot exceed `--topic-queue-capacity`. `--publish-wait-ms 0` does not wait for room. `--help` and `-h` print the name, version and usage, then exit 0. A bad flag prints the usage line to standard error and exits 2.
 
 ### Run a consumer and a producer
 
@@ -320,14 +345,14 @@ java -jar dess-client/target/dess-client.jar produce --topic sales --message hel
 ```
 
 ```text
-Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]
+Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]
 ```
 
-`consume` may repeat `--topic`. `produce` takes one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. The consumer prints the topic, one space, the payload and a newline. `--host` defaults to `127.0.0.1` and `--port` to `55123`.
+`consume` may repeat `--topic`. `produce` takes one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. `--confirm` is accepted only by `produce` and applies to every publish: `BROKER` (the default) or `ALL`. Any other value exits 2. The consumer prints the topic, one space, the payload and a newline, then acknowledges that delivery with the topic and offset. An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT` and `SLOW_CONSUMER`, prints one line containing the code and exits 1. An `ACK_TIMEOUT` line also contains the expected and received counts. `--host` defaults to `127.0.0.1` and `--port` to `55123`.
 
 ### Generate TLS certificates
 
-TLS is part of the target architecture and is not active in protocol version 1.
+TLS is part of the target architecture and is not active in protocol version 2.
 
 ```bash
 # TODO: keytool scripts under config/
