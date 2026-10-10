@@ -3,6 +3,7 @@ package dev.dess.broker;
 import dev.dess.common.logging.Logging;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -13,6 +14,8 @@ public final class TopicRegistry {
     private final int outboundCapacity;
 
     private final FlowControl flow;
+
+    private final boolean autoCreate;
 
     private final Consumer<Subscription> onFull;
 
@@ -25,22 +28,63 @@ public final class TopicRegistry {
      */
     private final ConcurrentHashMap<PendingKey, PendingConfirmation> pending = new ConcurrentHashMap<>();
 
-    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, Consumer<Subscription> onFull) {
+    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, boolean autoCreate, Consumer<Subscription> onFull) {
         this.topicQueueCapacity = topicQueueCapacity;
         this.outboundCapacity = outboundCapacity;
         this.flow = flow;
+        this.autoCreate = autoCreate;
         this.onFull = onFull;
     }
 
     public Topic open(String name) {
-        return topics.computeIfAbsent(name, topic -> new Topic(topic, topicQueueCapacity, outboundCapacity, flow, this, onFull));
+        return resolve(name, autoCreate, "AUTO");
     }
 
-    public void subscribe(ClientConnection connection, String name) {
+    void declare(String name) {
+        resolve(name, true, "CONFIG");
+    }
+
+    public boolean subscribe(ClientConnection connection, String name) {
         Topic topic = open(name);
+        if (topic == null) {
+            return false;
+        }
         if (topic.add(connection)) {
             event("subscription.added", Map.of("clientId", Long.toString(connection.id()), "topic", name));
         }
+        return true;
+    }
+
+    boolean hasTopic(String name) {
+        return topics.containsKey(name);
+    }
+
+    Set<Long> subscribers(String name) {
+        Topic topic = topics.get(name);
+        if (topic == null) {
+            return Set.of();
+        }
+        return topic.subscribers();
+    }
+
+    private Topic resolve(String name, boolean create, String source) {
+        Topic existing = topics.get(name);
+        if (existing != null) {
+            return existing;
+        }
+        if (!create) {
+            return null;
+        }
+        Topic created = new Topic(name, topicQueueCapacity, outboundCapacity, flow, this, onFull);
+        Topic prior = topics.putIfAbsent(name, created);
+        if (prior != null) {
+            return prior;
+        }
+        Map<String, String> properties = new LinkedHashMap<>();
+        properties.put("topic", name);
+        properties.put("source", source);
+        event("topic.created", properties);
+        return created;
     }
 
     public void remove(ClientConnection connection, String name, String reason) {

@@ -59,6 +59,16 @@ class ConsumeCommandTest {
     }
 
     @Test
+    void unknownTopicExitsOneAndNamesTheCode() throws Exception {
+        assertBrokerErrorExitsOne("UNKNOWN_TOPIC");
+    }
+
+    @Test
+    void slowConsumerExitsOneAndNamesTheCode() throws Exception {
+        assertBrokerErrorExitsOne("SLOW_CONSUMER");
+    }
+
+    @Test
     void interruptUnsubscribesAndExitsZero() throws Exception {
         Path output = Files.createTempFile("dess-consume-out", ".txt");
         Path error = Files.createTempFile("dess-consume-err", ".txt");
@@ -145,6 +155,16 @@ class ConsumeCommandTest {
             synchronized (text) {
                 return text.toString();
             }
+        }
+    }
+
+    private static void assertBrokerErrorExitsOne(String code) throws Exception {
+        try (ScriptedBroker broker = ScriptedBroker.start()) {
+            broker.failSubscribes(code);
+            CliProcess.Result result = CliProcess.run(null, List.of(
+                    "consume", "--topic", "sales", "--port", Integer.toString(broker.port())));
+            assertEquals(1, result.exitCode(), result.stderr());
+            assertTrue(result.stderr().contains(code), result.stderr());
         }
     }
 

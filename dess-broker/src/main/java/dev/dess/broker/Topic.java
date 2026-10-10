@@ -56,6 +56,15 @@ final class Topic {
         return name;
     }
 
+    Set<Long> subscribers() {
+        lock.lock();
+        try {
+            return Set.copyOf(subscriptions.keySet());
+        } finally {
+            lock.unlock();
+        }
+    }
+
     boolean add(ClientConnection connection) {
         lock.lock();
         try {

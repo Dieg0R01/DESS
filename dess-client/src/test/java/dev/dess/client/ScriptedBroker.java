@@ -28,6 +28,7 @@ final class ScriptedBroker implements AutoCloseable {
     private volatile Socket client;
     private volatile OutputStream output;
     private volatile String publishError;
+    private volatile String subscribeError;
     private volatile int[] acknowledgementTimeout;
     private long nextOffset;
 
@@ -48,6 +49,10 @@ final class ScriptedBroker implements AutoCloseable {
 
     void rejectPublishes(String code) {
         publishError = code;
+    }
+
+    void failSubscribes(String code) {
+        subscribeError = code;
     }
 
     void timeOutAcknowledgements(int expected, int received) {
@@ -169,8 +174,14 @@ final class ScriptedBroker implements AutoCloseable {
                     write(new Frame(Command.ERROR, FrameCodec.errorHeader(code, "rejected"), new byte[0]));
                 }
             }
+            case SUBSCRIBE -> {
+                String code = subscribeError;
+                if (code != null) {
+                    write(new Frame(Command.ERROR, FrameCodec.errorHeader(code, "rejected"), new byte[0]));
+                }
+            }
             case PING -> write(new Frame(Command.PONG, new byte[0], new byte[0]));
-            case HELLO, SUBSCRIBE, UNSUBSCRIBE, DELIVER, ACK, PONG, ERROR -> {
+            case HELLO, UNSUBSCRIBE, DELIVER, ACK, PONG, ERROR -> {
             }
             default -> {
                 Command unexpected = frame.command();

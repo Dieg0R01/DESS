@@ -11,6 +11,7 @@ import java.net.Socket;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -47,7 +48,10 @@ public final class Broker implements AutoCloseable {
             return thread;
         });
         this.flow = new FlowControl(config.maxInFlight());
-        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, this::scheduleLagCheck);
+        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck);
+        for (String name : config.topics()) {
+            registry.declare(name);
+        }
         this.permits = new Semaphore(config.maxConnections());
         this.serverSocket = bind(config.port());
         this.startedAt = System.nanoTime();
@@ -84,6 +88,14 @@ public final class Broker implements AutoCloseable {
 
     FlowControl flow() {
         return flow;
+    }
+
+    boolean hasTopic(String name) {
+        return registry.hasTopic(name);
+    }
+
+    Set<Long> subscribers(String name) {
+        return registry.subscribers(name);
     }
 
     public int port() {

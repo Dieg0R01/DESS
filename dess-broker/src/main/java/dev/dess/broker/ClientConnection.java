@@ -306,7 +306,9 @@ public final class ClientConnection implements Runnable {
             reject(topic, ErrorCode.INVALID_TOPIC_NAME, "invalid topic name");
             return;
         }
-        registry.subscribe(this, topic);
+        if (!registry.subscribe(this, topic)) {
+            reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
+        }
     }
 
     private void unsubscribe(Frame frame) throws IOException {
@@ -349,6 +351,10 @@ public final class ClientConnection implements Runnable {
             return;
         }
         Topic channel = registry.open(topic);
+        if (channel == null) {
+            reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
+            return;
+        }
         FlowControl flow = broker.flow();
         long started = System.nanoTime();
         long deadline = started + TimeUnit.MILLISECONDS.toNanos(config.publishWaitMillis());

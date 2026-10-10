@@ -5,6 +5,7 @@ import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.Delivery;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
+import dev.dess.common.protocol.FrameException;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +37,9 @@ final class ConsumeCommand {
             }
             while (true) {
                 Frame frame = session.readFrame();
+                if (frame.command() == Command.ERROR) {
+                    return fail(session, hook, err, errorCode(frame));
+                }
                 if (frame.command() == Command.DELIVER) {
                     Delivery delivery = FrameCodec.delivery(frame.header());
                     String text = new String(frame.payload(), StandardCharsets.UTF_8);
@@ -67,6 +71,23 @@ final class ConsumeCommand {
         }
         session.close();
         Runtime.getRuntime().halt(0);
+    }
+
+    private static int fail(BrokerSession session, Thread hook, PrintStream err, String code) {
+        if (!removeHook(hook)) {
+            return 0;
+        }
+        session.close();
+        err.println(Logging.format("ERROR", "dev.dess.client", code));
+        return 1;
+    }
+
+    private static String errorCode(Frame frame) {
+        try {
+            return FrameCodec.errorCode(frame.header());
+        } catch (FrameException ex) {
+            return "ERROR";
+        }
     }
 
     private static boolean removeHook(Thread hook) {

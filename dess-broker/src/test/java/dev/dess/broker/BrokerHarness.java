@@ -5,6 +5,7 @@ import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.Set;
 
 public final class BrokerHarness implements AutoCloseable {
 
@@ -27,6 +28,14 @@ public final class BrokerHarness implements AutoCloseable {
             broker.close();
             throw new IllegalStateException("Broker did not accept a connection within 2 seconds", ex);
         }
+    }
+
+    public boolean hasTopic(String name) {
+        return broker.hasTopic(name);
+    }
+
+    public Set<Long> subscribers(String name) {
+        return broker.subscribers(name);
     }
 
     public int port() {
