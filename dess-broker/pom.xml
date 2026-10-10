@@ -13,6 +13,10 @@
     <artifactId>dess-broker</artifactId>
     <name>DESS Broker</name>
 
+    <properties>
+        <dess.stress.runs>1</dess.stress.runs>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>dev.dess</groupId>
@@ -50,6 +54,15 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <dess.stress.runs>${dess.stress.runs}</dess.stress.runs>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
