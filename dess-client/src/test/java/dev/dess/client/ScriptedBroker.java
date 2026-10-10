@@ -2,6 +2,7 @@ package dev.dess.client;
 
 import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.ConfirmationMode;
+import dev.dess.common.protocol.ErrorCode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
@@ -27,6 +28,7 @@ final class ScriptedBroker implements AutoCloseable {
     private volatile Socket client;
     private volatile OutputStream output;
     private volatile String publishError;
+    private volatile int[] acknowledgementTimeout;
     private long nextOffset;
 
     private ScriptedBroker(ServerSocket server) {
@@ -46,6 +48,10 @@ final class ScriptedBroker implements AutoCloseable {
 
     void rejectPublishes(String code) {
         publishError = code;
+    }
+
+    void timeOutAcknowledgements(int expected, int received) {
+        acknowledgementTimeout = new int[] {expected, received};
     }
 
     void deliver(String topic, byte[] payload) throws IOException {
@@ -151,9 +157,13 @@ final class ScriptedBroker implements AutoCloseable {
     private void reply(Frame frame) throws IOException {
         switch (frame.command()) {
             case PUBLISH -> {
+                String topic = FrameCodec.publication(frame.header()).topic();
+                int[] timeout = acknowledgementTimeout;
                 String code = publishError;
-                if (code == null) {
-                    String topic = FrameCodec.publication(frame.header()).topic();
+                if (timeout != null) {
+                    write(new Frame(Command.ERROR, FrameCodec.ackTimeoutHeader(
+                            ErrorCode.ACK_TIMEOUT.name(), "acknowledgement timed out", topic, 0, timeout[0], timeout[1]), new byte[0]));
+                } else if (code == null) {
                     write(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, 0, ConfirmationMode.BROKER, 0), new byte[0]));
                 } else {
                     write(new Frame(Command.ERROR, FrameCodec.errorHeader(code, "rejected"), new byte[0]));

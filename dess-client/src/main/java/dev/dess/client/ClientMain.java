@@ -7,7 +7,7 @@ import java.io.PrintStream;
 
 public final class ClientMain {
 
-    static final String USAGE = "Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]";
+    static final String USAGE = "Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]";
 
     private ClientMain() {
     }

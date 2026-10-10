@@ -1,6 +1,7 @@
 package dev.dess.broker;
 
 import dev.dess.common.logging.Logging;
+import dev.dess.common.protocol.ClientAck;
 import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.ErrorCode;
@@ -233,6 +234,9 @@ public final class ClientConnection implements Runnable {
         for (Subscription subscription : owned) {
             registry.remove(this, subscription.topic().name(), "DISCONNECT");
         }
+        if (first) {
+            registry.dropExpecting(id);
+        }
         if (!first) {
             return;
         }
@@ -361,7 +365,7 @@ public final class ClientConnection implements Runnable {
                 }
             }
             acquired = true;
-            accepted = channel.append(id, payload, deadline);
+            accepted = channel.append(id, payload, deadline, mode, config.ackTimeoutMillis());
         } catch (InterruptedException ex) {
             if (acquired) {
                 flow.release();
@@ -381,13 +385,56 @@ public final class ClientConnection implements Runnable {
             flow.throttled(System.nanoTime() - started, true);
         }
         long offset = accepted.offset();
-        writeFrame(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, offset, ConfirmationMode.BROKER, 0), new byte[0]));
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("topic", topic);
         properties.put("offset", Long.toString(offset));
         properties.put("sizeBytes", Integer.toString(payload.length));
         properties.put("clientId", Long.toString(id));
         Logging.event("dev.dess.broker", "message.accepted", properties);
+        switch (mode) {
+            case BROKER -> acknowledgeBroker(topic, offset);
+            case ALL -> confirmAll(topic, offset);
+            default -> {
+                ConfirmationMode unexpected = mode;
+                throw new IllegalStateException("Unhandled mode " + unexpected);
+            }
+        }
+    }
+
+    private void acknowledgeBroker(String topic, long offset) throws IOException {
+        writeFrame(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, offset, ConfirmationMode.BROKER, 0), new byte[0]));
+    }
+
+    private void confirmAll(String topic, long offset) throws IOException {
+        PendingConfirmation confirmation = registry.confirmation(topic, offset);
+        if (confirmation == null) {
+            writeFrame(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, offset, ConfirmationMode.ALL, 0), new byte[0]));
+            return;
+        }
+        PendingConfirmation.Outcome outcome;
+        try {
+            outcome = confirmation.await();
+        } catch (InterruptedException ex) {
+            registry.discard(topic, offset);
+            Thread.currentThread().interrupt();
+            closing = true;
+            state = State.CLOSING;
+            return;
+        }
+        registry.discard(topic, offset);
+        if (outcome.complete()) {
+            writeFrame(new Frame(Command.ACK, FrameCodec.brokerAckHeader(topic, offset, ConfirmationMode.ALL, outcome.received()), new byte[0]));
+            return;
+        }
+        Map<String, String> properties = new LinkedHashMap<>();
+        properties.put("topic", topic);
+        properties.put("offset", Long.toString(offset));
+        properties.put("expected", Integer.toString(outcome.expectedCount()));
+        properties.put("received", Integer.toString(outcome.received()));
+        properties.put("clientId", Long.toString(id));
+        Logging.event("dev.dess.broker", "ack.timeout", properties);
+        writeFrame(new Frame(Command.ERROR, FrameCodec.ackTimeoutHeader(
+                ErrorCode.ACK_TIMEOUT.name(), "acknowledgement timed out", topic, offset, outcome.expectedCount(), outcome.received()), new byte[0]));
     }
 
     private void acknowledge(Frame frame) throws IOException {
@@ -395,10 +442,21 @@ public final class ClientConnection implements Runnable {
             fail(ErrorCode.MALFORMED_FRAME, "malformed ack");
             return;
         }
+        ClientAck ack;
         try {
-            FrameCodec.clientAck(frame.header());
+            ack = FrameCodec.clientAck(frame.header());
         } catch (FrameException ex) {
             fail(ErrorCode.MALFORMED_FRAME, "malformed ack");
+            return;
+        }
+        Subscription subscription = subscriptions.get(ack.topic());
+        if (subscription == null || !subscription.topic().delivered(subscription, ack.offset())) {
+            Logging.log("WARN", "dev.dess.broker", "clientId=" + id + " topic=" + ack.topic() + " offset=" + ack.offset());
+            return;
+        }
+        PendingConfirmation confirmation = registry.confirmation(ack.topic(), ack.offset());
+        if (confirmation != null) {
+            confirmation.acknowledge(id);
         }
     }
 

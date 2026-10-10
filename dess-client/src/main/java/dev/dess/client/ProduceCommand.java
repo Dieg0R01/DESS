@@ -1,6 +1,7 @@
 package dev.dess.client;
 
 import dev.dess.common.logging.Logging;
+import dev.dess.common.protocol.AckTimeout;
 import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
@@ -28,10 +29,10 @@ final class ProduceCommand {
         }
         try {
             for (byte[] payload : payloads(request, in)) {
-                session.publish(request.topics().get(0), payload);
+                session.publish(request.topics().get(0), payload, request.confirm());
                 Frame reply = awaitReply(session);
                 if (reply.command() == Command.ERROR) {
-                    return fail(err, errorCode(reply));
+                    return fail(err, errorText(reply));
                 }
                 if (reply.command() != Command.ACK) {
                     return fail(err, "unexpected " + reply.command());
@@ -83,11 +84,16 @@ final class ProduceCommand {
         }
     }
 
-    private static String errorCode(Frame frame) {
+    private static String errorText(Frame frame) {
         try {
-            return FrameCodec.errorCode(frame.header());
+            AckTimeout timeout = FrameCodec.ackTimeout(frame.header());
+            return timeout.code() + " expected=" + timeout.expected() + " received=" + timeout.received();
         } catch (FrameException ex) {
-            return "ERROR";
+            try {
+                return FrameCodec.errorCode(frame.header());
+            } catch (FrameException again) {
+                return "ERROR";
+            }
         }
     }
 

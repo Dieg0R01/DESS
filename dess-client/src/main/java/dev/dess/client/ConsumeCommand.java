@@ -2,6 +2,7 @@ package dev.dess.client;
 
 import dev.dess.common.logging.Logging;
 import dev.dess.common.protocol.Command;
+import dev.dess.common.protocol.Delivery;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
@@ -36,9 +37,10 @@ final class ConsumeCommand {
             while (true) {
                 Frame frame = session.readFrame();
                 if (frame.command() == Command.DELIVER) {
-                    String topic = FrameCodec.delivery(frame.header()).topic();
+                    Delivery delivery = FrameCodec.delivery(frame.header());
                     String text = new String(frame.payload(), StandardCharsets.UTF_8);
-                    out.println(topic + " " + text);
+                    out.println(delivery.topic() + " " + text);
+                    session.acknowledge(delivery.topic(), delivery.offset());
                 }
             }
         } catch (IOException ex) {

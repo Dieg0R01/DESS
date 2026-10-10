@@ -13,6 +13,9 @@ final class Subscription {
     /** Guarded by the topic lock. */
     private long cursor;
 
+    /** Guarded by the topic lock. Offsets below this have been handed to the writer. */
+    private long handedOff;
+
     /** Guarded by the topic lock. */
     private boolean active = true;
 
@@ -27,6 +30,7 @@ final class Subscription {
         this.topic = topic;
         this.subscribedAt = subscribedAt;
         this.cursor = subscribedAt;
+        this.handedOff = subscribedAt;
     }
 
     ClientConnection connection() {
@@ -47,6 +51,14 @@ final class Subscription {
 
     void advanceCursor() {
         cursor++;
+    }
+
+    long handedOff() {
+        return handedOff;
+    }
+
+    void handOffNext() {
+        handedOff = cursor + 1;
     }
 
     boolean isActive() {

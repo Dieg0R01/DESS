@@ -44,6 +44,7 @@ final class ConnectionWriter implements Runnable {
             topic.settle(subscription);
             return;
         }
+        topic.handOff(subscription);
         connection.beginWriting();
         try {
             connection.writeDeliver(topic.name(), delivery.offset(), delivery.payload());

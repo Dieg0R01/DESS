@@ -1,9 +1,13 @@
 package dev.dess.broker;
 
+import dev.dess.common.protocol.ConfirmationMode;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -19,6 +23,8 @@ final class Topic {
     private final Consumer<Subscription> onFull;
 
     private final FlowControl flow;
+
+    private final TopicRegistry registry;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -37,11 +43,12 @@ final class Topic {
     /** Guarded by {@link #lock}. */
     private final Map<Long, Subscription> subscriptions = new HashMap<>();
 
-    Topic(String name, int capacity, int outboundCapacity, FlowControl flow, Consumer<Subscription> onFull) {
+    Topic(String name, int capacity, int outboundCapacity, FlowControl flow, TopicRegistry registry, Consumer<Subscription> onFull) {
         this.name = name;
         this.capacity = capacity;
         this.outboundCapacity = outboundCapacity;
         this.flow = flow;
+        this.registry = registry;
         this.onFull = onFull;
     }
 
@@ -89,7 +96,7 @@ final class Topic {
         }
     }
 
-    AppendResult append(long publisherId, byte[] payload, long deadlineNanos) throws InterruptedException {
+    AppendResult append(long publisherId, byte[] payload, long deadlineNanos, ConfirmationMode mode, int ackTimeoutMillis) throws InterruptedException {
         List<Subscription> becameFull = new ArrayList<>();
         AppendResult accepted;
         lock.lock();
@@ -103,7 +110,7 @@ final class Topic {
                 }
                 notFull.awaitNanos(waiting);
             }
-            accepted = new AppendResult(accept(publisherId, payload, becameFull), waited);
+            accepted = new AppendResult(accept(publisherId, payload, becameFull, mode, ackTimeoutMillis), waited);
         } finally {
             lock.unlock();
         }
@@ -148,6 +155,28 @@ final class Topic {
         }
     }
 
+    void handOff(Subscription subscription) {
+        lock.lock();
+        try {
+            if (subscription.isActive()) {
+                subscription.handOffNext();
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    boolean delivered(Subscription subscription, long offset) {
+        lock.lock();
+        try {
+            return subscription.isActive()
+                    && offset >= subscription.subscribedAt()
+                    && offset < subscription.handedOff();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     void settle(Subscription subscription) {
         lock.lock();
         try {
@@ -185,7 +214,7 @@ final class Topic {
         }
     }
 
-    private long accept(long publisherId, byte[] payload, List<Subscription> becameFull) {
+    private long accept(long publisherId, byte[] payload, List<Subscription> becameFull, ConfirmationMode mode, int ackTimeoutMillis) {
         if (ring == null) {
             ring = new Entry[capacity];
         }
@@ -197,6 +226,27 @@ final class Topic {
             reclaim();
             flow.release();
             return offset;
+        }
+        switch (mode) {
+            case BROKER -> {
+            }
+            case ALL -> {
+                Set<Long> expected = new HashSet<>();
+                for (Subscription subscription : subscriptions.values()) {
+                    long subscriber = subscription.connection().id();
+                    if (subscriber != publisherId && !subscription.connection().isClosing()) {
+                        expected.add(subscriber);
+                    }
+                }
+                if (!expected.isEmpty()) {
+                    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ackTimeoutMillis);
+                    registry.register(name, offset, new PendingConfirmation(expected, deadline));
+                }
+            }
+            default -> {
+                ConfirmationMode unexpected = mode;
+                throw new IllegalStateException("Unhandled mode " + unexpected);
+            }
         }
         long now = System.nanoTime();
         for (Subscription subscription : subscriptions.values()) {

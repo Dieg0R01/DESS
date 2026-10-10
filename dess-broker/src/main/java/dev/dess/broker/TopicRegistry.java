@@ -18,6 +18,13 @@ public final class TopicRegistry {
 
     private final ConcurrentHashMap<String, Topic> topics = new ConcurrentHashMap<>();
 
+    /**
+     * Mode {@code ALL} confirmations, keyed by topic and offset.
+     * Inserted under the topic lock before that entry's subscriptions are marked ready.
+     * Lookups and removal do not take the topic lock.
+     */
+    private final ConcurrentHashMap<PendingKey, PendingConfirmation> pending = new ConcurrentHashMap<>();
+
     public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, Consumer<Subscription> onFull) {
         this.topicQueueCapacity = topicQueueCapacity;
         this.outboundCapacity = outboundCapacity;
@@ -26,7 +33,7 @@ public final class TopicRegistry {
     }
 
     public Topic open(String name) {
-        return topics.computeIfAbsent(name, topic -> new Topic(topic, topicQueueCapacity, outboundCapacity, flow, onFull));
+        return topics.computeIfAbsent(name, topic -> new Topic(topic, topicQueueCapacity, outboundCapacity, flow, this, onFull));
     }
 
     public void subscribe(ClientConnection connection, String name) {
@@ -51,7 +58,28 @@ public final class TopicRegistry {
         event("subscription.removed", properties);
     }
 
+    void register(String topic, long offset, PendingConfirmation confirmation) {
+        pending.put(new PendingKey(topic, offset), confirmation);
+    }
+
+    PendingConfirmation confirmation(String topic, long offset) {
+        return pending.get(new PendingKey(topic, offset));
+    }
+
+    void discard(String topic, long offset) {
+        pending.remove(new PendingKey(topic, offset));
+    }
+
+    void dropExpecting(long clientId) {
+        for (PendingConfirmation confirmation : pending.values()) {
+            confirmation.remove(clientId);
+        }
+    }
+
     private static void event(String name, Map<String, String> properties) {
         Logging.event("dev.dess.broker", name, properties);
+    }
+
+    private record PendingKey(String topic, long offset) {
     }
 }

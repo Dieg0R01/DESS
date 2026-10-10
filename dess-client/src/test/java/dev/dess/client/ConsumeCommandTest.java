@@ -3,7 +3,10 @@ package dev.dess.client;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.dess.common.protocol.ClientAck;
 import dev.dess.common.protocol.Command;
+import dev.dess.common.protocol.Frame;
+import dev.dess.common.protocol.FrameCodec;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -37,11 +40,22 @@ class ConsumeCommandTest {
                 String newline = System.lineSeparator();
                 assertTrue(text.contains("sales hello" + newline), text);
                 assertTrue(text.contains("billing \uFFFD" + newline), text);
+                assertTrue(broker.await(Command.ACK, "sales", Duration.ofSeconds(2)));
+                assertTrue(broker.await(Command.ACK, "billing", Duration.ofSeconds(2)));
+                assertEquals(0L, acknowledgement(broker, "sales").offset());
+                assertEquals(1L, acknowledgement(broker, "billing").offset());
             } finally {
                 stop(process);
                 Files.deleteIfExists(error);
             }
         }
+    }
+
+    @Test
+    void confirmFlagIsRejected() throws Exception {
+        CliProcess.Result result = CliProcess.run(null, List.of(
+                "consume", "--topic", "sales", "--confirm", "ALL"));
+        assertEquals(2, result.exitCode(), result.stderr());
     }
 
     @Test
@@ -132,6 +146,15 @@ class ConsumeCommandTest {
                 return text.toString();
             }
         }
+    }
+
+    private static ClientAck acknowledgement(ScriptedBroker broker, String topic) {
+        for (Frame frame : broker.frames()) {
+            if (frame.command() == Command.ACK && topic.equals(FrameCodec.leadingTopic(frame.header()))) {
+                return FrameCodec.clientAck(frame.header());
+            }
+        }
+        throw new AssertionError(broker.frames());
     }
 
     private static void stop(Process process) throws InterruptedException, IOException {

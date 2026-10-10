@@ -1,5 +1,6 @@
 package dev.dess.client;
 
+import dev.dess.common.protocol.ConfirmationMode;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -12,8 +13,9 @@ final class ClientRequest {
     private final int port;
     private final int heartbeatMs;
     private final String logLevel;
+    private final ConfirmationMode confirm;
 
-    private ClientRequest(String command, List<String> topics, String message, String host, int port, int heartbeatMs, String logLevel) {
+    private ClientRequest(String command, List<String> topics, String message, String host, int port, int heartbeatMs, String logLevel, ConfirmationMode confirm) {
         this.command = command;
         this.topics = topics;
         this.message = message;
@@ -21,6 +23,7 @@ final class ClientRequest {
         this.port = port;
         this.heartbeatMs = heartbeatMs;
         this.logLevel = logLevel;
+        this.confirm = confirm;
     }
 
     static ClientRequest parse(String[] args) {
@@ -39,6 +42,7 @@ final class ClientRequest {
         Integer port = null;
         Integer heartbeatMs = null;
         String logLevel = null;
+        ConfirmationMode confirm = null;
         for (int index = 1; index < args.length; index++) {
             switch (args[index]) {
                 case "--topic" -> {
@@ -95,6 +99,17 @@ final class ClientRequest {
                     }
                     index++;
                 }
+                case "--confirm" -> {
+                    if (!"produce".equals(command) || confirm != null) {
+                        return null;
+                    }
+                    String value = value(args, index + 1);
+                    confirm = confirmation(value);
+                    if (confirm == null) {
+                        return null;
+                    }
+                    index++;
+                }
                 case "--log-level" -> {
                     if (logLevel != null) {
                         return null;
@@ -117,7 +132,8 @@ final class ClientRequest {
         int resolvedPort = port == null ? 55123 : port;
         int resolvedHeartbeat = heartbeatMs == null ? 10_000 : heartbeatMs;
         String resolvedLevel = logLevel == null ? "INFO" : logLevel;
-        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedHeartbeat, resolvedLevel);
+        ConfirmationMode resolvedConfirm = confirm == null ? ConfirmationMode.BROKER : confirm;
+        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedHeartbeat, resolvedLevel, resolvedConfirm);
     }
 
     String command() {
@@ -146,6 +162,20 @@ final class ClientRequest {
 
     String logLevel() {
         return logLevel;
+    }
+
+    ConfirmationMode confirm() {
+        return confirm;
+    }
+
+    private static ConfirmationMode confirmation(String value) {
+        if ("BROKER".equals(value)) {
+            return ConfirmationMode.BROKER;
+        }
+        if ("ALL".equals(value)) {
+            return ConfirmationMode.ALL;
+        }
+        return null;
     }
 
     private static String value(String[] args, int index) {
