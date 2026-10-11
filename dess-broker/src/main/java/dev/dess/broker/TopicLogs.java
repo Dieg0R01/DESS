@@ -22,60 +22,67 @@ final class TopicLogs {
 
     private final long records;
 
+    private final int truncatedRecords;
+
     private final long durationMs;
 
-    private TopicLogs(Path directory, Durability durability, int files, long records, long durationMs) {
+    private TopicLogs(Path directory, Durability durability, int files, long records, int truncatedRecords, long durationMs) {
         this.directory = directory;
         this.durability = durability;
         this.files = files;
         this.records = records;
+        this.truncatedRecords = truncatedRecords;
         this.durationMs = durationMs;
     }
 
     static TopicLogs open(Path directory, Durability durability) throws IOException {
         long started = System.nanoTime();
         Files.createDirectories(directory);
-        TopicLogs logs = new TopicLogs(directory, durability, 0, 0, 0);
+        ConcurrentHashMap<String, TopicLog> opened = new ConcurrentHashMap<>();
         int files = 0;
         long records = 0;
+        int truncatedRecords = 0;
         try (DirectoryStream<Path> children = Files.newDirectoryStream(directory)) {
             try {
                 for (Path child : children) {
-                String name = child.getFileName().toString();
-                if ("broker.lock".equals(name) || name.endsWith(".tmp")) {
-                    continue;
+                    String name = child.getFileName().toString();
+                    if ("broker.lock".equals(name) || name.endsWith(".tmp")) {
+                        continue;
+                    }
+                    if (name.endsWith(".log") && Files.isDirectory(child)) {
+                        continue;
+                    }
+                    if (!name.endsWith(".log") || !Files.isRegularFile(child)) {
+                        throw new IOException("Unexpected log directory entry " + child.toAbsolutePath());
+                    }
+                    String topic = name.substring(0, name.length() - 4);
+                    if (!TopicName.isValid(topic)) {
+                        throw new IOException("Unexpected log directory entry " + child.toAbsolutePath());
+                    }
+                    TopicLog log = TopicLog.open(child, durability);
+                    opened.put(topic, log);
+                    files++;
+                    records += log.nextOffset();
+                    truncatedRecords += log.truncatedRecords();
                 }
-                if (name.endsWith(".log") && Files.isDirectory(child)) {
-                    continue;
-                }
-                if (!name.endsWith(".log") || !Files.isRegularFile(child)) {
-                    throw new IOException("Unexpected log directory entry " + child.toAbsolutePath());
-                }
-                String topic = name.substring(0, name.length() - 4);
-                if (!TopicName.isValid(topic)) {
-                    throw new IOException("Unexpected log directory entry " + child.toAbsolutePath());
-                }
-                TopicLog log = TopicLog.open(child, durability);
-                logs.logs.put(topic, log);
-                files++;
-                records += log.nextOffset();
-            }
             } catch (IOException ex) {
-                try {
-                    logs.close();
-                } catch (IOException closeEx) {
-                    ex.addSuppressed(closeEx);
+                for (TopicLog log : opened.values()) {
+                    try {
+                        log.close();
+                    } catch (IOException closeEx) {
+                        ex.addSuppressed(closeEx);
+                    }
                 }
                 throw ex;
             }
         }
         long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-        return new TopicLogs(directory, durability, files, records, durationMs, logs.logs);
+        return new TopicLogs(directory, durability, files, records, truncatedRecords, durationMs, opened);
     }
 
-    private TopicLogs(Path directory, Durability durability, int files, long records, long durationMs, ConcurrentHashMap<String, TopicLog> logs) {
-        this(directory, durability, files, records, durationMs);
-        this.logs.putAll(logs);
+    private TopicLogs(Path directory, Durability durability, int files, long records, int truncatedRecords, long durationMs, ConcurrentHashMap<String, TopicLog> opened) {
+        this(directory, durability, files, records, truncatedRecords, durationMs);
+        this.logs.putAll(opened);
     }
 
     int files() {
@@ -84,6 +91,10 @@ final class TopicLogs {
 
     long records() {
         return records;
+    }
+
+    int truncatedRecords() {
+        return truncatedRecords;
     }
 
     long durationMs() {

@@ -33,6 +33,7 @@ public final class Broker implements AutoCloseable {
     private final ScheduledExecutorService flowTimer;
     private final FlowControl flow;
     private final TopicRegistry registry;
+    private final LogDirectory directory;
     private final TopicLogs logs;
     private final Object syncMonitor = new Object();
     private volatile boolean syncStop;
@@ -52,20 +53,28 @@ public final class Broker implements AutoCloseable {
             return thread;
         });
         this.flow = new FlowControl(config.maxInFlight());
-        this.logs = TopicLogs.open(config.logDirectory(), config.durability());
-        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck, logs);
-        for (String name : config.topics()) {
-            registry.declare(name);
-        }
-        this.permits = new Semaphore(config.maxConnections());
         try {
-            this.serverSocket = bind(config.port());
-        } catch (IOException ex) {
+            this.directory = LogDirectory.acquire(config.logDirectory());
             try {
-                logs.close();
-            } catch (IOException closeEx) {
-                ex.addSuppressed(closeEx);
+                this.logs = TopicLogs.open(config.logDirectory(), config.durability());
+            } catch (IOException ex) {
+                closeDirectory(directory, ex);
+                throw ex;
             }
+            this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck, logs);
+            try {
+                for (String name : config.topics()) {
+                    registry.declare(name);
+                }
+                this.permits = new Semaphore(config.maxConnections());
+                this.serverSocket = bind(config.port());
+            } catch (IOException ex) {
+                closeLogs(logs, ex);
+                closeDirectory(directory, ex);
+                throw ex;
+            }
+        } catch (IOException ex) {
+            flowTimer.shutdownNow();
             throw ex;
         }
         this.startedAt = System.nanoTime();
@@ -89,7 +98,7 @@ public final class Broker implements AutoCloseable {
         Map<String, String> recovered = new LinkedHashMap<>();
         recovered.put("files", Integer.toString(logs.files()));
         recovered.put("records", Long.toString(logs.records()));
-        recovered.put("truncatedRecords", "0");
+        recovered.put("truncatedRecords", Integer.toString(logs.truncatedRecords()));
         recovered.put("durationMs", Long.toString(logs.durationMs()));
         Logging.event("dev.dess.broker", "log.recovered", recovered);
         Map<String, String> started = new LinkedHashMap<>();
@@ -97,6 +106,22 @@ public final class Broker implements AutoCloseable {
         started.put("tcpPort", Integer.toString(serverSocket.getLocalPort()));
         Logging.event("dev.dess.broker", "broker.started", started);
         this.acceptThread.start();
+    }
+
+    private static void closeLogs(TopicLogs logs, IOException failure) {
+        try {
+            logs.close();
+        } catch (IOException ex) {
+            failure.addSuppressed(ex);
+        }
+    }
+
+    private static void closeDirectory(LogDirectory directory, IOException failure) {
+        try {
+            directory.close();
+        } catch (IOException ex) {
+            failure.addSuppressed(ex);
+        }
     }
 
     private static ServerSocket bind(int port) throws IOException {
@@ -242,11 +267,24 @@ public final class Broker implements AutoCloseable {
         }
         int inFlightLost = flow.inFlight();
         stopSync();
+        IOException storageFailure = null;
         try {
             logs.forceAll();
             logs.close();
         } catch (IOException ex) {
-            throw new IllegalStateException("Could not force the topic logs", ex);
+            storageFailure = ex;
+        }
+        try {
+            directory.close();
+        } catch (IOException ex) {
+            if (storageFailure == null) {
+                storageFailure = ex;
+            } else {
+                storageFailure.addSuppressed(ex);
+            }
+        }
+        if (storageFailure != null) {
+            throw new IllegalStateException("Could not force the topic logs", storageFailure);
         }
         for (ClientConnection connection : List.copyOf(connections.values())) {
             connection.cleanup();

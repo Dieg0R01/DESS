@@ -1,5 +1,6 @@
 package dev.dess.broker;
 
+import dev.dess.common.logging.Logging;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -42,7 +43,10 @@ final class TopicLog {
     /** Guarded by {@link #appendLock}. {@code positions[offset]} is the file position of that record. */
     private long[] positions;
 
-    private TopicLog(String topic, Path file, FileChannel channel, Durability durability, LongSupplier clock, long size, long nextOffset, long[] positions) {
+    /** Torn tails removed while opening this file. Fixed at construction. */
+    private final int truncatedRecords;
+
+    private TopicLog(String topic, Path file, FileChannel channel, Durability durability, LongSupplier clock, long size, long nextOffset, long[] positions, int truncatedRecords) {
         this.topic = topic;
         this.file = file;
         this.channel = channel;
@@ -51,6 +55,7 @@ final class TopicLog {
         this.size = size;
         this.nextOffset = nextOffset;
         this.positions = positions;
+        this.truncatedRecords = truncatedRecords;
     }
 
     static TopicLog open(Path file, Durability durability) throws IOException {
@@ -63,7 +68,7 @@ final class TopicLog {
             Scan scan = scan(file, channel);
             String fileName = file.getFileName().toString();
             String topic = fileName.substring(0, fileName.length() - 4);
-            return new TopicLog(topic, file, channel, durability, clock, scan.size(), scan.nextOffset(), scan.positions());
+            return new TopicLog(topic, file, channel, durability, clock, scan.size(), scan.nextOffset(), scan.positions(), scan.truncatedRecords());
         } catch (IOException ex) {
             channel.close();
             throw ex;
@@ -72,6 +77,10 @@ final class TopicLog {
 
     String topic() {
         return topic;
+    }
+
+    int truncatedRecords() {
+        return truncatedRecords;
     }
 
     long nextOffset() {
@@ -184,22 +193,35 @@ final class TopicLog {
         long position = 0;
         long next = 0;
         long[] found = new long[0];
+        int truncated = 0;
         ByteBuffer lengthBuffer = ByteBuffer.allocate(4);
+        ByteBuffer body = ByteBuffer.allocate(256);
         while (position < fileSize) {
             if (fileSize - position < 4) {
-                throw torn(file, position);
+                discardTail(file, channel, position);
+                truncated = 1;
+                break;
             }
             lengthBuffer.clear();
             readFully(channel, lengthBuffer, position);
             lengthBuffer.flip();
             int bodyLength = lengthBuffer.getInt();
-            if (bodyLength < FIXED_BODY) {
-                throw damaged(file, position);
+            if (bodyLength < 0) {
+                throw corrupt(file, position);
             }
             if (fileSize - position < 4L + bodyLength) {
-                throw torn(file, position);
+                discardTail(file, channel, position);
+                truncated = 1;
+                break;
             }
-            ByteBuffer body = ByteBuffer.allocate(bodyLength);
+            if (bodyLength < FIXED_BODY) {
+                throw corrupt(file, position);
+            }
+            if (body.capacity() < bodyLength) {
+                body = ByteBuffer.allocate(bodyLength);
+            }
+            body.clear();
+            body.limit(bodyLength);
             readFully(channel, body, position + 4);
             body.flip();
             CRC32 crc = new CRC32();
@@ -208,13 +230,16 @@ final class TopicLog {
             long offset = body.getLong();
             body.getLong();
             int payloadLength = body.getInt();
-            if (payloadLength < 0 || 25L + payloadLength != bodyLength) {
-                throw damaged(file, position);
+            if (payloadLength < 0 || FIXED_BODY + (long) payloadLength != bodyLength) {
+                throw corrupt(file, position);
             }
             body.position(body.position() + payloadLength);
             long actual = Integer.toUnsignedLong(body.getInt());
             if (version != VERSION || offset != next || actual != crc.getValue()) {
-                throw damaged(file, position);
+                throw corrupt(file, position);
+            }
+            if (next > Integer.MAX_VALUE) {
+                throw new IOException("Too many records in " + file.toAbsolutePath());
             }
             if (found.length <= next) {
                 found = Arrays.copyOf(found, found.length == 0 ? 16 : found.length * 2);
@@ -223,7 +248,29 @@ final class TopicLog {
             next++;
             position += 4L + bodyLength;
         }
-        return new Scan(position, next, found);
+        return new Scan(position, next, found, truncated);
+    }
+
+    private static void discardTail(Path file, FileChannel channel, long position) throws IOException {
+        channel.truncate(position);
+        channel.force(true);
+        Logging.log("WARN", "dev.dess.broker", event("log.truncated", file, position));
+    }
+
+    private static IOException corrupt(Path file, long position) {
+        Logging.log("ERROR", "dev.dess.broker", event("log.corrupt", file, position));
+        return new IOException("Damaged record in " + file.toAbsolutePath() + " at " + position);
+    }
+
+    private static String event(String name, Path file, long position) {
+        return "event=" + name + " file=" + quote(file.toAbsolutePath().toString()) + " position=" + position;
+    }
+
+    private static String quote(String value) {
+        if (value.indexOf(' ') < 0 && value.indexOf('"') < 0 && value.indexOf('=') < 0) {
+            return value;
+        }
+        return "\"" + value.replace("\"", "\\\"") + "\"";
     }
 
     private static void readFully(FileChannel channel, ByteBuffer buffer, long position) throws IOException {
@@ -237,17 +284,9 @@ final class TopicLog {
         }
     }
 
-    private static IOException torn(Path file, long position) {
-        return new IOException("Torn record in " + file.toAbsolutePath() + " at " + position);
-    }
-
-    private static IOException damaged(Path file, long position) {
-        return new IOException("Damaged record in " + file.toAbsolutePath() + " at " + position);
-    }
-
     record Written(long offset, long timestamp) {
     }
 
-    private record Scan(long size, long nextOffset, long[] positions) {
+    private record Scan(long size, long nextOffset, long[] positions, int truncatedRecords) {
     }
 }
