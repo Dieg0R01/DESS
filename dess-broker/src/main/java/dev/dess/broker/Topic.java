@@ -124,7 +124,7 @@ final class Topic {
         }
     }
 
-    AppendResult append(long publisherId, byte[] payload, long deadlineNanos, ConfirmationMode mode, int ackTimeoutMillis) throws InterruptedException {
+    AppendResult append(long publisherId, byte[] payload, byte[] digest, long deadlineNanos, ConfirmationMode mode, int ackTimeoutMillis) throws InterruptedException {
         boolean waited = false;
         lock.lock();
         try {
@@ -145,7 +145,7 @@ final class Topic {
         }
         TopicLog.Written written;
         try {
-            written = log.append(payload);
+            written = log.append(payload, digest);
         } catch (IOException ex) {
             lock.lock();
             try {
@@ -167,7 +167,7 @@ final class Topic {
                     interrupted = true;
                 }
             }
-            accept(written.offset(), publisherId, payload, becameFull, mode, ackTimeoutMillis);
+            accept(written.offset(), publisherId, payload, digest, becameFull, mode, ackTimeoutMillis);
             inflight--;
             committed.signalAll();
         } finally {
@@ -210,16 +210,16 @@ final class Topic {
             long offset = subscription.cursor();
             Entry entry = ring == null ? null : ring[index(offset)];
             if (entry != null && entry.offset == offset && entry.payload != null) {
-                return new Delivery(offset, entry.payload, -1L);
+                return new Delivery(offset, entry.payload, entry.digest, -1L);
             }
-            return new Delivery(offset, null, log.position(offset));
+            return new Delivery(offset, null, null, log.position(offset));
         } finally {
             lock.unlock();
         }
     }
 
-    byte[] retainedPayload(long filePosition) throws IOException {
-        return log.payload(filePosition);
+    TopicLog.Stored retained(long filePosition) throws IOException {
+        return log.read(filePosition);
     }
 
     void handOff(Subscription subscription) {
@@ -282,15 +282,16 @@ final class Topic {
         }
     }
 
-    private void accept(long offset, long publisherId, byte[] payload, List<Subscription> becameFull, ConfirmationMode mode, int ackTimeoutMillis) {
+    private void accept(long offset, long publisherId, byte[] payload, byte[] digest, List<Subscription> becameFull, ConfirmationMode mode, int ackTimeoutMillis) {
         if (ring == null) {
             ring = new Entry[capacity];
         }
         nextOffset = offset + 1;
-        Entry entry = new Entry(offset, payload.clone(), publisherId, subscriptions.size());
+        Entry entry = new Entry(offset, payload.clone(), digest.clone(), publisherId, subscriptions.size());
         ring[index(offset)] = entry;
         if (entry.remaining == 0) {
             entry.payload = null;
+            entry.digest = null;
             reclaim();
             flow.release();
             return;
@@ -367,6 +368,7 @@ final class Topic {
         entry.remaining--;
         if (entry.remaining == 0) {
             entry.payload = null;
+            entry.digest = null;
             flow.release();
         }
     }
@@ -463,11 +465,14 @@ final class Topic {
 
         private final byte[] payload;
 
+        private final byte[] digest;
+
         private final long filePosition;
 
-        private Delivery(long offset, byte[] payload, long filePosition) {
+        private Delivery(long offset, byte[] payload, byte[] digest, long filePosition) {
             this.offset = offset;
             this.payload = payload;
+            this.digest = digest;
             this.filePosition = filePosition;
         }
 
@@ -477,6 +482,10 @@ final class Topic {
 
         byte[] payload() {
             return payload;
+        }
+
+        byte[] digest() {
+            return digest;
         }
 
         long filePosition() {
@@ -500,12 +509,16 @@ final class Topic {
         /** Guarded by the topic lock. */
         private byte[] payload;
 
+        /** Guarded by the topic lock. Released with {@link #payload}. */
+        private byte[] digest;
+
         /** Guarded by the topic lock. */
         private int remaining;
 
-        private Entry(long offset, byte[] payload, long publisherId, int remaining) {
+        private Entry(long offset, byte[] payload, byte[] digest, long publisherId, int remaining) {
             this.offset = offset;
             this.payload = payload;
+            this.digest = digest;
             this.publisherId = publisherId;
             this.remaining = remaining;
         }

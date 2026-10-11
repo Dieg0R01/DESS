@@ -230,11 +230,11 @@ public final class ClientConnection implements Runnable {
         }
     }
 
-    void writeDeliver(String topic, long offset, byte[] payload) throws IOException {
+    void writeDeliver(String topic, long offset, byte[] payload, byte[] digest) throws IOException {
         if (closing || state == State.CLOSING) {
             throw new IOException("connection is closing");
         }
-        writeFrame(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset, Digests.of(topic, payload)), payload));
+        writeFrame(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset, digest), payload));
     }
 
     void cleanup() {
@@ -441,6 +441,10 @@ public final class ClientConnection implements Runnable {
             reject(topic, ErrorCode.UNAUTHORIZED, "unauthorized");
             return;
         }
+        if (!Digests.matches(topic, payload, publication.digest())) {
+            reject(topic, ErrorCode.INTEGRITY_FAILED, "integrity failed");
+            return;
+        }
         Topic channel;
         try {
             channel = registry.open(topic);
@@ -468,7 +472,7 @@ public final class ClientConnection implements Runnable {
                 }
             }
             acquired = true;
-            accepted = channel.append(id, payload, deadline, mode, config.ackTimeoutMillis());
+            accepted = channel.append(id, payload, publication.digest(), deadline, mode, config.ackTimeoutMillis());
         } catch (InterruptedException ex) {
             if (acquired) {
                 flow.release();

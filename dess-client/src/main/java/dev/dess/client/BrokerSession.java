@@ -2,6 +2,7 @@ package dev.dess.client;
 
 import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.ConfirmationMode;
+import dev.dess.common.protocol.Delivery;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import dev.dess.common.protocol.StartPosition;
@@ -83,6 +84,10 @@ public final class BrokerSession implements AutoCloseable {
 
     public void unsubscribe(String topic) throws IOException {
         write(new Frame(Command.UNSUBSCRIBE, FrameCodec.topicHeader(topic), new byte[0]));
+    }
+
+    static boolean intact(Delivery delivery, byte[] payload) {
+        return Digests.matches(delivery.topic(), payload, delivery.digest());
     }
 
     public Frame readFrame() throws IOException {

@@ -308,8 +308,15 @@ class DurabilityTest {
             int version = view.get() & 0xff;
             long offset = view.getLong();
             view.getLong();
+            if (version == 2) {
+                if (view.remaining() < 32 + 4 + 4) {
+                    break;
+                }
+                view.position(view.position() + 32);
+            }
             int payloadLength = view.getInt();
-            if (version != 1 || payloadLength < 0 || 25L + payloadLength != bodyLength) {
+            int fixed = version == 1 ? 25 : version == 2 ? 57 : -1;
+            if (fixed < 0 || payloadLength < 0 || (long) fixed + payloadLength != bodyLength) {
                 break;
             }
             byte[] payload = new byte[payloadLength];

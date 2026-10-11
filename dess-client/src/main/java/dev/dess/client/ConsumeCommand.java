@@ -61,6 +61,9 @@ final class ConsumeCommand {
                 }
                 if (frame.command() == Command.DELIVER) {
                     Delivery delivery = FrameCodec.delivery(frame.header());
+                    if (!BrokerSession.intact(delivery, frame.payload())) {
+                        return integrityFailed(session, hook, err, delivery);
+                    }
                     String text = new String(frame.payload(), StandardCharsets.UTF_8);
                     out.println(delivery.topic() + " " + text);
                     if (offsets != null) {
@@ -105,6 +108,16 @@ final class ConsumeCommand {
         }
         session.close();
         Runtime.getRuntime().halt(0);
+    }
+
+    private static int integrityFailed(BrokerSession session, Thread hook, PrintStream err, Delivery delivery) {
+        if (!removeHook(hook)) {
+            return 0;
+        }
+        session.close();
+        err.println(Logging.format("ERROR", "dev.dess.client",
+                "INTEGRITY_FAILED topic=" + delivery.topic() + " offset=" + delivery.offset()));
+        return 1;
     }
 
     private static int fail(BrokerSession session, Thread hook, PrintStream err, String code) {

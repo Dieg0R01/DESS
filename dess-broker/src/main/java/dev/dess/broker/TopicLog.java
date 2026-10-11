@@ -1,6 +1,7 @@
 package dev.dess.broker;
 
 import dev.dess.common.logging.Logging;
+import dev.dess.common.security.Digests;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -13,9 +14,13 @@ import java.util.zip.CRC32;
 
 final class TopicLog {
 
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
-    private static final int FIXED_BODY = 25;
+    private static final int VERSION_1 = 1;
+
+    private static final int FIXED_V1 = 25;
+
+    private static final int FIXED_V2 = 57;
 
     /** The topic this file stores. */
     private final String topic;
@@ -98,11 +103,15 @@ final class TopicLog {
     }
 
     byte[] payload(long filePosition) throws IOException {
+        return read(filePosition).payload();
+    }
+
+    Stored read(long filePosition) throws IOException {
         ByteBuffer lengthBuffer = ByteBuffer.allocate(4);
         readFully(channel, lengthBuffer, filePosition);
         lengthBuffer.flip();
         int bodyLength = lengthBuffer.getInt();
-        if (bodyLength < FIXED_BODY) {
+        if (bodyLength < FIXED_V1) {
             throw damaged(filePosition);
         }
         ByteBuffer body = ByteBuffer.allocate(bodyLength);
@@ -113,8 +122,10 @@ final class TopicLog {
         int version = body.get() & 0xff;
         body.getLong();
         body.getLong();
+        byte[] digest = digestBytes(version, body, filePosition);
         int payloadLength = body.getInt();
-        if (payloadLength < 0 || FIXED_BODY + (long) payloadLength != bodyLength || version != VERSION) {
+        int fixed = fixedBody(version);
+        if (payloadLength < 0 || fixed < 0 || fixed + (long) payloadLength != bodyLength) {
             throw damaged(filePosition);
         }
         byte[] stored = new byte[payloadLength];
@@ -123,7 +134,10 @@ final class TopicLog {
         if (actual != crc.getValue()) {
             throw damaged(filePosition);
         }
-        return stored;
+        if (digest == null) {
+            digest = Digests.of(topic, stored);
+        }
+        return new Stored(stored, digest);
     }
 
     private IOException damaged(long filePosition) {
@@ -131,6 +145,13 @@ final class TopicLog {
     }
 
     Written append(byte[] payload) throws IOException {
+        return append(payload, Digests.of(topic, payload));
+    }
+
+    Written append(byte[] payload, byte[] digest) throws IOException {
+        if (digest == null || digest.length != Digests.LENGTH) {
+            throw new IllegalArgumentException("digest must be 32 bytes");
+        }
         appendLock.lock();
         try {
             long offset = nextOffset;
@@ -138,7 +159,7 @@ final class TopicLog {
             long start = size;
             int written;
             try {
-                written = writeRecord(offset, timestamp, payload, start);
+                written = writeRecord(offset, timestamp, payload, digest, start);
                 switch (durability) {
                     case ALWAYS -> channel.force(true);
                     case INTERVAL -> {
@@ -186,14 +207,15 @@ final class TopicLog {
         }
     }
 
-    private int writeRecord(long offset, long timestamp, byte[] payload, long position) throws IOException {
-        int bodyLength = FIXED_BODY + payload.length;
+    private int writeRecord(long offset, long timestamp, byte[] payload, byte[] digest, long position) throws IOException {
+        int bodyLength = FIXED_V2 + payload.length;
         ByteBuffer record = ByteBuffer.allocate(4 + bodyLength);
         record.putInt(bodyLength);
         int crcStart = record.position();
         record.put((byte) VERSION);
         record.putLong(offset);
         record.putLong(timestamp);
+        record.put(digest);
         record.putInt(payload.length);
         record.put(payload);
         CRC32 crc = new CRC32();
@@ -252,7 +274,7 @@ final class TopicLog {
                 truncated = 1;
                 break;
             }
-            if (bodyLength < FIXED_BODY) {
+            if (bodyLength < FIXED_V1) {
                 throw corrupt(file, position);
             }
             if (body.capacity() < bodyLength) {
@@ -267,13 +289,23 @@ final class TopicLog {
             int version = body.get() & 0xff;
             long offset = body.getLong();
             body.getLong();
+            if (version != VERSION_1 && version != VERSION) {
+                throw corrupt(file, position);
+            }
+            if (version == VERSION) {
+                if (body.remaining() < Digests.LENGTH + 4 + 4) {
+                    throw corrupt(file, position);
+                }
+                body.position(body.position() + Digests.LENGTH);
+            }
             int payloadLength = body.getInt();
-            if (payloadLength < 0 || FIXED_BODY + (long) payloadLength != bodyLength) {
+            int fixed = fixedBody(version);
+            if (payloadLength < 0 || fixed + (long) payloadLength != bodyLength) {
                 throw corrupt(file, position);
             }
             body.position(body.position() + payloadLength);
             long actual = Integer.toUnsignedLong(body.getInt());
-            if (version != VERSION || offset != next || actual != crc.getValue()) {
+            if (offset != next || actual != crc.getValue()) {
                 throw corrupt(file, position);
             }
             if (next > Integer.MAX_VALUE) {
@@ -322,7 +354,33 @@ final class TopicLog {
         }
     }
 
+    private static int fixedBody(int version) {
+        return switch (version) {
+            case VERSION_1 -> FIXED_V1;
+            case VERSION -> FIXED_V2;
+            default -> -1;
+        };
+    }
+
+    private static byte[] digestBytes(int version, ByteBuffer body, long filePosition) throws IOException {
+        return switch (version) {
+            case VERSION_1 -> null;
+            case VERSION -> {
+                if (body.remaining() < Digests.LENGTH + 4 + 4) {
+                    throw new IOException("Damaged record at " + filePosition);
+                }
+                byte[] digest = new byte[Digests.LENGTH];
+                body.get(digest);
+                yield digest;
+            }
+            default -> throw new IOException("Damaged record at " + filePosition);
+        };
+    }
+
     record Written(long offset, long timestamp) {
+    }
+
+    record Stored(byte[] payload, byte[] digest) {
     }
 
     private record Scan(long size, long nextOffset, long[] positions, int truncatedRecords) {

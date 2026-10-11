@@ -45,9 +45,12 @@ final class ConnectionWriter implements Runnable {
             return;
         }
         byte[] payload = delivery.payload();
+        byte[] digest = delivery.digest();
         if (payload == null) {
             try {
-                payload = topic.retainedPayload(delivery.filePosition());
+                TopicLog.Stored stored = topic.retained(delivery.filePosition());
+                payload = stored.payload();
+                digest = stored.digest();
             } catch (IOException ex) {
                 connection.cleanup();
                 return;
@@ -56,7 +59,7 @@ final class ConnectionWriter implements Runnable {
         topic.handOff(subscription);
         connection.beginWriting();
         try {
-            connection.writeDeliver(topic.name(), delivery.offset(), payload);
+            connection.writeDeliver(topic.name(), delivery.offset(), payload, digest);
         } catch (IOException ex) {
             connection.cleanup();
             return;
