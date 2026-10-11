@@ -33,6 +33,10 @@ public final class Broker implements AutoCloseable {
     private final ScheduledExecutorService flowTimer;
     private final FlowControl flow;
     private final TopicRegistry registry;
+    private final TopicLogs logs;
+    private final Object syncMonitor = new Object();
+    private volatile boolean syncStop;
+    private Thread logSync;
     private final ConcurrentHashMap<Long, ClientConnection> connections = new ConcurrentHashMap<>();
     private final Semaphore permits;
     private final long startedAt;
@@ -48,17 +52,46 @@ public final class Broker implements AutoCloseable {
             return thread;
         });
         this.flow = new FlowControl(config.maxInFlight());
-        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck);
+        this.logs = TopicLogs.open(config.logDirectory(), config.durability());
+        this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck, logs);
         for (String name : config.topics()) {
             registry.declare(name);
         }
         this.permits = new Semaphore(config.maxConnections());
-        this.serverSocket = bind(config.port());
+        try {
+            this.serverSocket = bind(config.port());
+        } catch (IOException ex) {
+            try {
+                logs.close();
+            } catch (IOException closeEx) {
+                ex.addSuppressed(closeEx);
+            }
+            throw ex;
+        }
         this.startedAt = System.nanoTime();
         this.readers = newPool(config.maxConnections(), config.threadKeepAliveMillis());
         this.writers = newPool(config.maxConnections(), config.threadKeepAliveMillis());
         this.acceptThread = new Thread(this::acceptLoop, "dess-accept-" + serverSocket.getLocalPort());
         this.acceptThread.setDaemon(false);
+        switch (config.durability()) {
+            case INTERVAL -> {
+                this.logSync = new Thread(this::syncLogs, "dess-log-sync");
+                this.logSync.setDaemon(false);
+                this.logSync.start();
+            }
+            case ALWAYS -> {
+            }
+            default -> {
+                Durability unexpected = config.durability();
+                throw new IllegalStateException("Unhandled durability " + unexpected);
+            }
+        }
+        Map<String, String> recovered = new LinkedHashMap<>();
+        recovered.put("files", Integer.toString(logs.files()));
+        recovered.put("records", Long.toString(logs.records()));
+        recovered.put("truncatedRecords", "0");
+        recovered.put("durationMs", Long.toString(logs.durationMs()));
+        Logging.event("dev.dess.broker", "log.recovered", recovered);
         Map<String, String> started = new LinkedHashMap<>();
         started.put("version", Integer.toString(FrameCodec.PROTOCOL_VERSION));
         started.put("tcpPort", Integer.toString(serverSocket.getLocalPort()));
@@ -208,6 +241,13 @@ public final class Broker implements AutoCloseable {
             throw new IllegalStateException("Accept thread " + acceptThread.getName() + " did not stop");
         }
         int inFlightLost = flow.inFlight();
+        stopSync();
+        try {
+            logs.forceAll();
+            logs.close();
+        } catch (IOException ex) {
+            throw new IllegalStateException("Could not force the topic logs", ex);
+        }
         for (ClientConnection connection : List.copyOf(connections.values())) {
             connection.cleanup();
         }
@@ -290,6 +330,53 @@ public final class Broker implements AutoCloseable {
                 });
         pool.allowCoreThreadTimeOut(true);
         return pool;
+    }
+
+    private void syncLogs() {
+        while (!syncStop) {
+            synchronized (syncMonitor) {
+                if (syncStop) {
+                    return;
+                }
+                try {
+                    syncMonitor.wait(config.syncIntervalMillis());
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (syncStop) {
+                    return;
+                }
+            }
+            try {
+                long started = System.nanoTime();
+                int files = logs.forceAll();
+                long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                Logging.log("DEBUG", "dev.dess.broker", "event=log.synced files=" + files + " durationMs=" + durationMs);
+            } catch (IOException ex) {
+                Logging.log("ERROR", "dev.dess.broker", "log sync failed: " + ex.getMessage());
+            }
+        }
+    }
+
+    private void stopSync() {
+        Thread sync = logSync;
+        if (sync == null) {
+            return;
+        }
+        synchronized (syncMonitor) {
+            syncStop = true;
+            syncMonitor.notifyAll();
+        }
+        try {
+            sync.join(config.shutdownTimeoutMillis());
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while stopping the log sync", ex);
+        }
+        if (sync.isAlive()) {
+            throw new IllegalStateException("Log sync thread did not stop");
+        }
     }
 
     private static void refuse(Socket socket) {

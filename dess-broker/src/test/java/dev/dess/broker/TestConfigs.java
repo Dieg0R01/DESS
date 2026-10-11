@@ -11,6 +11,29 @@ public final class TestConfigs {
     private TestConfigs() {
     }
 
+    public static BrokerConfig durable(Path logDirectory, Durability durability, int syncIntervalMillis) {
+        return new BrokerConfig(
+                0,
+                32,
+                BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES,
+                120_000,
+                BrokerConfig.DEFAULT_MAX_IN_FLIGHT,
+                BrokerConfig.DEFAULT_TOPIC_QUEUE_CAPACITY,
+                BrokerConfig.DEFAULT_OUTBOUND_CAPACITY,
+                BrokerConfig.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
+                BrokerConfig.DEFAULT_PUBLISH_WAIT_MILLIS,
+                BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS,
+                true,
+                List.of(),
+                logDirectory,
+                durability,
+                syncIntervalMillis,
+                "INFO",
+                1_000,
+                2_000,
+                null);
+    }
+
     public static BrokerConfig of(int port, int maxConnections, int maxPayloadBytes, int idleTimeoutMillis) {
         return full(port, maxConnections, maxPayloadBytes, idleTimeoutMillis,
                 BrokerConfig.DEFAULT_MAX_IN_FLIGHT,

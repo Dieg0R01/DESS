@@ -1,6 +1,7 @@
 package dev.dess.broker;
 
 import dev.dess.common.logging.Logging;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -19,6 +20,8 @@ public final class TopicRegistry {
 
     private final Consumer<Subscription> onFull;
 
+    private final TopicLogs logs;
+
     private final ConcurrentHashMap<String, Topic> topics = new ConcurrentHashMap<>();
 
     /**
@@ -28,23 +31,31 @@ public final class TopicRegistry {
      */
     private final ConcurrentHashMap<PendingKey, PendingConfirmation> pending = new ConcurrentHashMap<>();
 
-    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, boolean autoCreate, Consumer<Subscription> onFull) {
+    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, boolean autoCreate, Consumer<Subscription> onFull, TopicLogs logs) {
         this.topicQueueCapacity = topicQueueCapacity;
         this.outboundCapacity = outboundCapacity;
         this.flow = flow;
         this.autoCreate = autoCreate;
         this.onFull = onFull;
+        this.logs = logs;
+        for (TopicLog recovered : logs.recovered()) {
+            topics.put(recovered.topic(), topic(recovered));
+            Map<String, String> properties = new LinkedHashMap<>();
+            properties.put("topic", recovered.topic());
+            properties.put("source", "RECOVERED");
+            event("topic.created", properties);
+        }
     }
 
-    public Topic open(String name) {
+    public Topic open(String name) throws IOException {
         return resolve(name, autoCreate, "AUTO");
     }
 
-    void declare(String name) {
+    void declare(String name) throws IOException {
         resolve(name, true, "CONFIG");
     }
 
-    public boolean subscribe(ClientConnection connection, String name) {
+    public boolean subscribe(ClientConnection connection, String name) throws IOException {
         Topic topic = open(name);
         if (topic == null) {
             return false;
@@ -67,7 +78,7 @@ public final class TopicRegistry {
         return topic.subscribers();
     }
 
-    private Topic resolve(String name, boolean create, String source) {
+    private Topic resolve(String name, boolean create, String source) throws IOException {
         Topic existing = topics.get(name);
         if (existing != null) {
             return existing;
@@ -75,7 +86,8 @@ public final class TopicRegistry {
         if (!create) {
             return null;
         }
-        Topic created = new Topic(name, topicQueueCapacity, outboundCapacity, flow, this, onFull);
+        TopicLog log = logs.openOrCreate(name);
+        Topic created = topic(log);
         Topic prior = topics.putIfAbsent(name, created);
         if (prior != null) {
             return prior;
@@ -85,6 +97,10 @@ public final class TopicRegistry {
         properties.put("source", source);
         event("topic.created", properties);
         return created;
+    }
+
+    private Topic topic(TopicLog log) {
+        return new Topic(log.topic(), topicQueueCapacity, outboundCapacity, flow, this, onFull, log);
     }
 
     public void remove(ClientConnection connection, String name, String reason) {

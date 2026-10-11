@@ -309,8 +309,12 @@ public final class ClientConnection implements Runnable {
             reject(topic, ErrorCode.INVALID_TOPIC_NAME, "invalid topic name");
             return;
         }
-        if (!registry.subscribe(this, topic)) {
-            reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
+        try {
+            if (!registry.subscribe(this, topic)) {
+                reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
+            }
+        } catch (IOException ex) {
+            reject(topic, ErrorCode.STORAGE_UNAVAILABLE, "storage unavailable");
         }
     }
 
@@ -353,7 +357,13 @@ public final class ClientConnection implements Runnable {
             reject(topic, ErrorCode.PAYLOAD_TOO_LARGE, "payload is too large");
             return;
         }
-        Topic channel = registry.open(topic);
+        Topic channel;
+        try {
+            channel = registry.open(topic);
+        } catch (IOException ex) {
+            reject(topic, ErrorCode.STORAGE_UNAVAILABLE, "storage unavailable");
+            return;
+        }
         if (channel == null) {
             reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
             return;
@@ -384,6 +394,11 @@ public final class ClientConnection implements Runnable {
             state = State.CLOSING;
             return;
         }
+        if (accepted.storageFailed()) {
+            flow.release();
+            reject(topic, ErrorCode.STORAGE_UNAVAILABLE, "storage unavailable");
+            return;
+        }
         if (!accepted.accepted()) {
             flow.release();
             flow.throttled(System.nanoTime() - started, false);
@@ -398,6 +413,7 @@ public final class ClientConnection implements Runnable {
         properties.put("topic", topic);
         properties.put("offset", Long.toString(offset));
         properties.put("sizeBytes", Integer.toString(payload.length));
+        properties.put("timestamp", Long.toString(accepted.timestamp()));
         properties.put("clientId", Long.toString(id));
         Logging.event("dev.dess.broker", "message.accepted", properties);
         switch (mode) {

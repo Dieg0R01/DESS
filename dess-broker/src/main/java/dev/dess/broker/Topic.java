@@ -1,6 +1,7 @@
 package dev.dess.broker;
 
 import dev.dess.common.protocol.ConfirmationMode;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -26,10 +27,15 @@ final class Topic {
 
     private final TopicRegistry registry;
 
+    private final TopicLog log;
+
     private final ReentrantLock lock = new ReentrantLock();
 
     /** Signalled with {@link #lock} held when the oldest ring slot is freed. */
     private final Condition notFull = lock.newCondition();
+
+    /** Signalled with {@link #lock} held when {@link #nextOffset} advances. */
+    private final Condition committed = lock.newCondition();
 
     /** Guarded by {@link #lock}. Allocated on the first accepted message. */
     private Entry[] ring;
@@ -37,19 +43,26 @@ final class Topic {
     /** Guarded by {@link #lock}. */
     private long baseOffset;
 
-    /** Guarded by {@link #lock}. */
+    /** Guarded by {@link #lock}. Visible records. Advances only after the log append returns. */
     private long nextOffset;
+
+    /** Guarded by {@link #lock}. Appends that have reserved ring space and are not visible yet. */
+    private int inflight;
 
     /** Guarded by {@link #lock}. */
     private final Map<Long, Subscription> subscriptions = new HashMap<>();
 
-    Topic(String name, int capacity, int outboundCapacity, FlowControl flow, TopicRegistry registry, Consumer<Subscription> onFull) {
+    Topic(String name, int capacity, int outboundCapacity, FlowControl flow, TopicRegistry registry, Consumer<Subscription> onFull, TopicLog log) {
         this.name = name;
         this.capacity = capacity;
         this.outboundCapacity = outboundCapacity;
         this.flow = flow;
         this.registry = registry;
         this.onFull = onFull;
+        this.log = log;
+        long recovered = log.nextOffset();
+        this.nextOffset = recovered;
+        this.baseOffset = recovered;
     }
 
     String name() {
@@ -106,12 +119,10 @@ final class Topic {
     }
 
     AppendResult append(long publisherId, byte[] payload, long deadlineNanos, ConfirmationMode mode, int ackTimeoutMillis) throws InterruptedException {
-        List<Subscription> becameFull = new ArrayList<>();
-        AppendResult accepted;
+        boolean waited = false;
         lock.lock();
         try {
-            boolean waited = false;
-            while (ring != null && nextOffset - baseOffset == capacity) {
+            while (ring != null && nextOffset + inflight - baseOffset == capacity) {
                 waited = true;
                 long waiting = deadlineNanos - System.nanoTime();
                 if (waiting <= 0) {
@@ -119,14 +130,50 @@ final class Topic {
                 }
                 notFull.awaitNanos(waiting);
             }
-            accepted = new AppendResult(accept(publisherId, payload, becameFull, mode, ackTimeoutMillis), waited);
+            if (ring == null) {
+                ring = new Entry[capacity];
+            }
+            inflight++;
+        } finally {
+            lock.unlock();
+        }
+        TopicLog.Written written;
+        try {
+            written = log.append(payload);
+        } catch (IOException ex) {
+            lock.lock();
+            try {
+                inflight--;
+                notFull.signalAll();
+            } finally {
+                lock.unlock();
+            }
+            return AppendResult.storage(waited);
+        }
+        List<Subscription> becameFull = new ArrayList<>();
+        boolean interrupted = false;
+        lock.lock();
+        try {
+            while (nextOffset != written.offset()) {
+                try {
+                    committed.await();
+                } catch (InterruptedException ex) {
+                    interrupted = true;
+                }
+            }
+            accept(written.offset(), publisherId, payload, becameFull, mode, ackTimeoutMillis);
+            inflight--;
+            committed.signalAll();
         } finally {
             lock.unlock();
         }
         for (Subscription subscription : becameFull) {
             onFull.accept(subscription);
         }
-        return accepted;
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        return new AppendResult(written.offset(), waited, written.timestamp());
     }
 
     boolean graceElapsed(Subscription subscription, long graceNanos) {
@@ -223,18 +270,18 @@ final class Topic {
         }
     }
 
-    private long accept(long publisherId, byte[] payload, List<Subscription> becameFull, ConfirmationMode mode, int ackTimeoutMillis) {
+    private void accept(long offset, long publisherId, byte[] payload, List<Subscription> becameFull, ConfirmationMode mode, int ackTimeoutMillis) {
         if (ring == null) {
             ring = new Entry[capacity];
         }
-        long offset = nextOffset++;
+        nextOffset = offset + 1;
         Entry entry = new Entry(offset, payload.clone(), publisherId, subscriptions.size());
         ring[index(offset)] = entry;
         if (entry.remaining == 0) {
             entry.payload = null;
             reclaim();
             flow.release();
-            return offset;
+            return;
         }
         switch (mode) {
             case BROKER -> {
@@ -264,7 +311,6 @@ final class Topic {
                 becameFull.add(subscription);
             }
         }
-        return offset;
     }
 
     private void releaseOwed(Subscription subscription) {
@@ -327,24 +373,40 @@ final class Topic {
 
         private final boolean waited;
 
-        private AppendResult(long offset, boolean waited) {
+        private final boolean storageFailed;
+
+        private final long timestamp;
+
+        private AppendResult(long offset, boolean waited, long timestamp) {
             this.offset = offset;
             this.accepted = true;
             this.waited = waited;
+            this.storageFailed = false;
+            this.timestamp = timestamp;
         }
 
-        private AppendResult() {
+        private AppendResult(boolean waited, boolean storageFailed) {
             this.offset = -1;
             this.accepted = false;
-            this.waited = true;
+            this.waited = waited;
+            this.storageFailed = storageFailed;
+            this.timestamp = 0;
         }
 
         static AppendResult rejected() {
-            return new AppendResult();
+            return new AppendResult(true, false);
+        }
+
+        static AppendResult storage(boolean waited) {
+            return new AppendResult(waited, true);
         }
 
         boolean accepted() {
             return accepted;
+        }
+
+        boolean storageFailed() {
+            return storageFailed;
         }
 
         long offset() {
@@ -353,6 +415,10 @@ final class Topic {
 
         boolean waited() {
             return waited;
+        }
+
+        long timestamp() {
+            return timestamp;
         }
     }
 

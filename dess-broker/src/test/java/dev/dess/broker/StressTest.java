@@ -185,7 +185,7 @@ class StressTest {
             }
         }
         remaining.sort(null);
-        assertEquals(List.of("dess-accept-" + port, "dess-flow-timer"), remaining);
+        assertEquals(List.of("dess-accept-" + port, "dess-flow-timer", "dess-log-sync"), remaining);
     }
 
     private static List<ProtocolClient> connect(BrokerHarness harness, int count, List<ProtocolClient> clients) throws IOException {
