@@ -29,6 +29,37 @@ class LogLevelTest {
     }
 
     @Test
+    void configurationNamesSelectTheSameLevels() {
+        String fine = capture(() -> {
+            Logging.configure("FINE");
+            Logging.log("DEBUG", "dev.dess.common.logging", "shown");
+        });
+        assertTrue(fine.contains(" DEBUG "));
+        assertTrue(fine.contains("shown"));
+        assertFalse(fine.contains("Unknown log level"));
+
+        String warning = capture(() -> {
+            Logging.configure("WARNING");
+            Logging.log("WARN", "dev.dess.common.logging", "kept");
+            Logging.log("DEBUG", "dev.dess.common.logging", "hidden");
+        });
+        assertTrue(warning.contains(" WARN "));
+        assertTrue(warning.contains("kept"));
+        assertFalse(warning.contains("hidden"));
+        assertFalse(warning.contains("Unknown log level"));
+
+        String severe = capture(() -> {
+            Logging.configure("SEVERE");
+            Logging.log("ERROR", "dev.dess.common.logging", "loud");
+            Logging.log("INFO", "dev.dess.common.logging", "quiet");
+        });
+        assertTrue(severe.contains(" ERROR "));
+        assertTrue(severe.contains("loud"));
+        assertFalse(severe.contains("quiet"));
+        assertFalse(severe.contains("Unknown log level"));
+    }
+
+    @Test
     void debugFlagRecordsTheVersionLineAtDebug() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();

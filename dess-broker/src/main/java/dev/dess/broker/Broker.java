@@ -287,7 +287,7 @@ public final class Broker implements AutoCloseable {
             throw new IllegalStateException("Could not close the broker socket", ex);
         }
         try {
-            acceptThread.join(2_000);
+            acceptThread.join(config.shutdownTimeoutMillis());
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while stopping the accept thread", ex);

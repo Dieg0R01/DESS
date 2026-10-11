@@ -8,7 +8,7 @@ DESS is a small event streaming platform inspired by the architecture of systems
 
 The goal is not to compete with production brokers, but to implement by hand — on top of the JDK — the building blocks that a distributed system relies on: networking over TCP and UDP, multithreading and synchronization, durable storage, XML configuration, TLS encryption, message integrity and a web management interface.
 
-> **Status:** protocol version 2 is implemented: a plain-TCP broker with `produce` and `consume`. Messages stay in memory for the life of the process. The durable log, TLS, UDP discovery, XML configuration and the admin API remain the target architecture.
+> **Status:** protocol version 3 is implemented: a plain-TCP broker with `produce` and `consume`. Confirmed messages are in the topic logs. TLS, UDP discovery and the admin API remain the target architecture.
 
 ---
 
@@ -38,20 +38,18 @@ The goal is not to compete with production brokers, but to implement by hand —
 - **Security:** TLS-encrypted channels, certificate-based authentication of producers and SHA-256 integrity checks on every message.
 - **Observability and control:** a REST API to list, create and delete topics and to read runtime metrics.
 
-### Non-goals (for now)
+### Non-goals
 
 - Multi-broker clustering, replication or leader election.
 - Topic partitioning and consumer groups.
 - Exactly-once delivery semantics.
 - Compatibility with the Kafka, AMQP or MQTT wire protocols.
 
-These may be revisited once the core system is complete.
-
 ---
 
 ## Architecture
 
-The system is made of three kinds of independent processes that communicate over the network, plus an administrative client.
+The system is made of three kinds of independent processes that communicate over the network, plus an administrative client. The diagram includes TLS, UDP discovery and the admin API, which remain target architecture. The running broker speaks plain TCP and writes each confirmed message to its topic log.
 
 ```mermaid
 flowchart LR
@@ -116,7 +114,7 @@ flowchart LR
 - **Per-topic queues.** Each topic owns a bounded `BlockingQueue`. Client handler threads `put()` incoming messages; a dedicated dispatcher thread per topic `take()`s them and delivers them to every subscriber, blocking naturally when the queue is empty.
 - **Flow control.** A `Semaphore` caps the number of in-flight, not-yet-delivered messages held in memory, applying back-pressure to producers when the broker is saturated.
 - **Delivery acknowledgements.** When a message requires confirmation from *N* consumers, the broker waits on a `CountDownLatch(N)` until all ACKs arrive (or a timeout expires).
-- **Persistence.** Every accepted message is appended to a binary log through `DataOutputStream` over a `BufferedOutputStream`, so it can be replayed after a restart.
+- **Persistence.** Every confirmed message is appended to that topic's log and forced according to the durability policy, so a later start can replay it.
 - **Discovery responder.** A `DatagramSocket` listens on a well-known UDP port. Clients broadcast a discovery request and the broker replies with its IP address and TCP port, resolved through `NetworkInterface` / `InetAddress`.
 - **Admin API.** A lightweight embedded HTTP server exposes resource-oriented endpoints for management and monitoring.
 
@@ -160,7 +158,7 @@ sequenceDiagram
 
 ## Wire protocol
 
-Protocol version 2 is a binary framing on plain TCP. Integers are big-endian and there is no padding. One frame is one record:
+Protocol version 3 is a binary framing on plain TCP. Integers are big-endian and there is no padding. One frame is one record:
 
 ```text
 uint32 frameLength
@@ -177,9 +175,9 @@ A topic is a `uint16` length followed by that many UTF-8 bytes. The name matches
 
 | Code | Command | Direction | Header | Payload |
 |------|---------|-----------|--------|---------|
-| 1 | `HELLO` | both | `uint16` version, only version 2 | empty |
+| 1 | `HELLO` | both | `uint16` version, only version 3 | empty |
 | 2 | `PUBLISH` | client → broker | topic, mode | message bytes |
-| 3 | `SUBSCRIBE` | client → broker | topic | empty |
+| 3 | `SUBSCRIBE` | client → broker | topic, start kind, and a `uint64` offset when the kind is `OFFSET` | empty |
 | 4 | `UNSUBSCRIBE` | client → broker | topic | empty |
 | 5 | `DELIVER` | broker → client | topic, offset | the same message bytes |
 | 6 | `ACK` | broker → client | topic, offset, mode, acknowledgement count | empty |
@@ -188,9 +186,11 @@ A topic is a `uint16` length followed by that many UTF-8 bytes. The name matches
 | 8 | `PONG` | broker → client | empty | empty |
 | 9 | `ERROR` | broker → client | error code and reason; `ACK_TIMEOUT` also carries topic, offset, expected count and received count | empty |
 
-The client's first frame is `HELLO` version 2. The broker answers with `HELLO` version 2. Any other first command is `HANDSHAKE_REQUIRED` and the connection closes. A `HELLO` for any version other than 2, version 1 included, is `UNSUPPORTED_VERSION` and the connection closes. A second `HELLO` is `MALFORMED_FRAME`.
+The client's first frame is `HELLO` version 3. The broker answers with `HELLO` version 3. Any other first command is `HANDSHAKE_REQUIRED` and the connection closes. A `HELLO` for any version other than 3, versions 1 and 2 included, is `UNSUPPORTED_VERSION` and the connection closes. A second `HELLO` is `MALFORMED_FRAME`.
 
-`SUBSCRIBE` and `UNSUBSCRIBE` have no reply on success. `UNSUBSCRIBE` of an unknown topic is also silent and does not create the topic. A connection may subscribe to any number of topics. Subscribing twice still delivers one copy. Each subscriber receives `DELIVER` frames for one topic in offset order, each exactly once. Frames from different topics on the same connection may interleave; there is no order across topics.
+`SUBSCRIBE` carries a start kind after the topic. Kind `0` is `LATEST`: the cursor is the topic's next offset when the subscription is registered, and no retained message is delivered. Kind `1` is `EARLIEST`: the cursor is 0, so every retained message is delivered and then messages accepted later, as one offset sequence. Kind `2` is `OFFSET` and is followed by a `uint64` offset. That offset is valid from 0 through the next offset, inclusive. An offset equal to the next offset waits at the live tail and replays nothing. An offset past the next offset is `INVALID_OFFSET`: the connection stays open and no subscription is added. Any other kind, a missing offset, or extra header bytes are `MALFORMED_FRAME` and the connection closes. An unknown topic is resolved before the offset is checked.
+
+`SUBSCRIBE` and `UNSUBSCRIBE` have no reply on success. `UNSUBSCRIBE` of an unknown topic is also silent and does not create the topic. A connection may subscribe to any number of topics. Subscribing twice still delivers one copy. Each subscriber receives `DELIVER` frames for one topic in offset order, each exactly once. A cursor that has left the in-memory tail is read from the topic log; the frame is the same. Frames from different topics on the same connection may interleave; there is no order across topics.
 
 Each accepted `PUBLISH` is answered with one `ACK` or one `ERROR`, never both, and never a reply for a later publish first. In mode `BROKER` the acknowledgement is sent as soon as the message is accepted, with `acknowledgements` 0, whatever the subscribers' pace. In mode `ALL` the broker waits until every subscriber that was registered at acceptance — except the publishing connection — has sent a client `ACK` for that offset. The acknowledgement then carries mode `ALL` and the number of subscribers that did. A subscriber that disconnects during the wait stops counting. With nobody expected, the acknowledgement is immediate and the count is 0. If the wait expires first, the reply is `ACK_TIMEOUT` and the connection stays open.
 
@@ -202,7 +202,7 @@ The client sends `PING` and the broker answers `PONG`. A command byte outside 1�
 |------|------|------------|
 | `MALFORMED_FRAME` | Header of the wrong shape, empty client `ACK`, or unknown mode byte | Closed |
 | `UNKNOWN_COMMAND` | Command byte is not 1–9 | Open |
-| `UNSUPPORTED_VERSION` | `HELLO` version is not 2 | Closed |
+| `UNSUPPORTED_VERSION` | `HELLO` version is not 3 | Closed |
 | `HANDSHAKE_REQUIRED` | First frame is not `HELLO` | Closed |
 | `PAYLOAD_TOO_LARGE` | Payload exceeds the configured maximum. A frame past the 16 MiB ceiling is also rejected and closes the connection | Open when the payload was read and discarded |
 | `INVALID_TOPIC_NAME` | Topic text breaks the naming rule | Open |
@@ -211,12 +211,14 @@ The client sends `PING` and the broker answers `PONG`. A command byte outside 1�
 | `UNKNOWN_TOPIC` | Topic does not exist and auto-creation is disabled | Open |
 | `SLOW_CONSUMER` | Outbound buffer stayed full beyond the grace period | Closed |
 | `ACK_TIMEOUT` | An `ALL` publish was not fully acknowledged in time | Open |
+| `STORAGE_UNAVAILABLE` | The record could not be written, or the file could not be forced under `ALWAYS`. Nothing was confirmed and nothing was delivered | Open |
+| `INVALID_OFFSET` | `SUBSCRIBE` asked for an offset greater than the topic's next offset | Open |
 
 When the broker-wide in-flight limit is reached, or a topic's queue is full, a publish waits up to the configured publish wait. If room appears, it is accepted. Otherwise the reply is `BROKER_BUSY` and the connection stays open. A message is in flight from acceptance until it has been written to every subscriber that was present then and is still connected. A subscriber whose outbound buffer stays full beyond the grace period receives `SLOW_CONSUMER` and the connection closes.
 
-With auto-creation enabled, the first valid `PUBLISH` or `SUBSCRIBE` on an unknown name creates the topic. With it disabled, both commands receive `UNKNOWN_TOPIC` and the connection stays open. A topic exists until the broker stops. Offsets on a topic keep increasing for that lifetime.
+With auto-creation enabled, the first valid `PUBLISH` or `SUBSCRIBE` on an unknown name creates the topic and writes the name into the configuration file before the command proceeds. With it disabled, both commands receive `UNKNOWN_TOPIC` and the connection stays open. A topic stays in its log and in the configuration file after the broker stops. Offsets on a topic keep increasing across restarts. Under `ALWAYS` the record is forced before any `DELIVER` and before the producer reply. Under `INTERVAL` the record is appended before either, and the force may lag by at most one `syncIntervalMs`.
 
-UDP discovery and TLS are part of the target architecture. They are not part of version 2.
+UDP discovery and TLS are part of the target architecture. They are not part of version 3.
 
 ---
 
@@ -267,9 +269,9 @@ Dependency direction is strictly one-way: `dess-broker`, `dess-client` and `dess
 | Build | Maven (multi-module) |
 | Networking | `java.net` (TCP/UDP), `javax.net.ssl` (JSSE) |
 | Concurrency | `java.util.concurrent` |
-| Persistence | `java.io` binary streams |
-| Configuration | Jakarta XML Binding (JAXB) |
-| Admin API | Embedded HTTP server (JAX-RS implementation or the JDK `HttpServer`, to be decided) |
+| Persistence | `java.nio` file channels, one append-only log per topic |
+| Configuration | Jakarta XML Binding (JAXB) and the JDK schema validator |
+| Admin API | Target architecture. Not served |
 | Admin client | `java.net.http.HttpClient` |
 | Testing | JUnit 5 |
 
@@ -279,7 +281,11 @@ Frameworks that would hide the distributed-systems mechanics (Spring, Netty, Kaf
 
 ## Configuration
 
-The broker reads its settings from `config.xml` at startup, mapped to Java objects through JAXB (`@XmlRootElement`, `@XmlElement`, `Unmarshaller`). Runtime changes, such as topics created through the API, can be written back with a `Marshaller`.
+The broker reads one XML document at startup. The only setting flag is `--config PATH`; when it is omitted, the file is `config.xml` in the working directory. A missing file is an error. The document is checked against a schema and then bound with JAXB. Elements that the document omits take the defaults below. A relative `logDirectory` resolves from the working directory.
+
+A topic created while the broker is running, and a topic found only in a log file at startup, is added to the document. The broker writes the complete document to a temporary sibling, forces it to disk, and moves it over the previous file. A crash during that write leaves the previous complete document.
+
+`durability` `ALWAYS` forces the topic file before the broker confirms the message. `INTERVAL` confirms the message after the append, and a background pass forces every topic file on `syncIntervalMs`. Everything confirmed before the last completed sync survives a kill, and only the newest messages confirmed after it may be lost, within one `syncIntervalMs`. An orderly stop forces every topic file under both policies.
 
 | Setting | Default |
 |---------|---------|
@@ -302,32 +308,38 @@ The broker reads its settings from `config.xml` at startup, mapped to Java objec
 | syncIntervalMs | 1000 |
 | level | INFO |
 
-Tentative shape:
+`config/config.xml` is a complete document:
 
 ```xml
+<?xml version="1.0" encoding="UTF-8"?>
 <broker>
     <network>
-        <tcpPort>8443</tcpPort>
-        <discoveryPort>9999</discoveryPort>
-        <adminPort>8080</adminPort>
-        <clientTimeoutMs>30000</clientTimeoutMs>
+        <port>55123</port>
+        <maxConnections>128</maxConnections>
+        <maxPayloadBytes>1048576</maxPayloadBytes>
+        <idleTimeoutMs>30000</idleTimeoutMs>
     </network>
     <engine>
-        <queueCapacity>10000</queueCapacity>
-        <maxInFlightMessages>50000</maxInFlightMessages>
-        <handlerThreads>32</handlerThreads>
+        <maxInFlight>10000</maxInFlight>
+        <topicQueueCapacity>1024</topicQueueCapacity>
+        <outboundCapacity>256</outboundCapacity>
+        <slowConsumerGraceMs>2000</slowConsumerGraceMs>
+        <publishWaitMs>1000</publishWaitMs>
+        <ackTimeoutMs>5000</ackTimeoutMs>
+        <threadKeepAliveMs>1000</threadKeepAliveMs>
+        <shutdownTimeoutMs>2000</shutdownTimeoutMs>
     </engine>
     <storage>
         <logDirectory>./data/logs</logDirectory>
+        <durability>ALWAYS</durability>
+        <syncIntervalMs>1000</syncIntervalMs>
     </storage>
-    <security>
-        <keystore>./config/broker.keystore</keystore>
-        <truststore>./config/broker.truststore</truststore>
-    </security>
-    <topics>
+    <topics autoCreate="true">
         <topic>sales</topic>
-        <topic>sensor-temperature</topic>
     </topics>
+    <logging>
+        <level>INFO</level>
+    </logging>
 </broker>
 ```
 
@@ -349,44 +361,40 @@ mvn clean verify
 ### Run the broker
 
 ```bash
-java -jar dess-broker/target/dess-broker.jar --port 55123
+java -jar dess-broker/target/dess-broker.jar --config config/config.xml
 ```
 
 ```text
-Usage: dess-broker [--port N] [--max-connections N] [--max-payload-bytes N] [--idle-timeout-ms N] [--max-in-flight N] [--topic-queue-capacity N] [--outbound-capacity N] [--slow-consumer-grace-ms N] [--publish-wait-ms N] [--ack-timeout-ms N] [--auto-create-topics true|false] [--topic NAME] [--log-level LEVEL]
+Usage: dess-broker [--config PATH]
 ```
 
-The defaults are port `55123`, 128 connections, 1048576-byte payloads, a 30000 ms idle timeout, 10000 messages in flight, a topic queue of 1024, an outbound window of 256, a 2000 ms slow-consumer grace, a 1000 ms publish wait, a 5000 ms acknowledgement timeout, and auto-creation on. Port `0` lets the operating system choose. `--topic` may be repeated; each name is created at startup. `--outbound-capacity` cannot exceed `--topic-queue-capacity`. `--publish-wait-ms 0` does not wait for room. `--help` and `-h` print the name, version and usage, then exit 0. A bad flag prints the usage line to standard error and exits 2.
+`--config` selects the document described above. The default path is `config.xml` in the working directory. `--help` and `-h` print the name, version and usage, then exit 0. An unknown flag, a missing value, or `--config` given twice prints the usage line to standard error and exits 2. A missing file, an invalid document, a log directory that cannot be created or is already in use, or a log damaged in the middle exits 1 and prints the problem without the usage line. The sample file declares `sales` and stores the topic logs in `./data/logs`.
 
 ### Run a consumer and a producer
 
 ```bash
-java -jar dess-client/target/dess-client.jar consume --topic sales
+java -jar dess-client/target/dess-client.jar consume --topic sales --from earliest
+java -jar dess-client/target/dess-client.jar consume --topic sales --resume
 java -jar dess-client/target/dess-client.jar produce --topic sales --message hello
 ```
 
 ```text
-Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]
+Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]
 ```
 
-`consume` may repeat `--topic`. `produce` takes one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. `--confirm` is accepted only by `produce` and applies to every publish: `BROKER` (the default) or `ALL`. Any other value exits 2. The consumer prints the topic, one space, the payload and a newline, then acknowledges that delivery with the topic and offset. An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT` and `SLOW_CONSUMER`, prints one line containing the code and exits 1. An `ACK_TIMEOUT` line also contains the expected and received counts. `--host` defaults to `127.0.0.1` and `--port` to `55123`.
+`consume` may repeat `--topic`. `produce` takes one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. `--confirm` is accepted only by `produce` and applies to every publish: `BROKER` (the default) or `ALL`. Any other value exits 2. The consumer prints the topic, one space, the payload and a newline, then acknowledges that delivery with the topic and offset.
+
+`--from` is `consume` only. `latest` starts at the next offset, `earliest` replays from offset 0, and `OFFSET` is a decimal integer from 0 up. The default is `latest`. `--resume` is `consume` only: each topic starts at its stored offset plus one, or at `latest` when the offset file has no line for it. After printing a delivery the client rewrites that file, forcing a temporary sibling and moving it into place, and only then sends the acknowledgement. `--resume-file` defaults to `dess-offsets` in the working directory and, by itself, neither reads nor writes. `--resume` together with `--from` exits 2. `produce` rejects `--from`, `--resume` and `--resume-file` with exit 2. `consume` without `--from` and without `--resume` subscribes at `latest` and does not write an offset file.
+
+An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT`, `SLOW_CONSUMER`, `STORAGE_UNAVAILABLE` and `INVALID_OFFSET`, prints one line containing the code and exits 1. An `ACK_TIMEOUT` line also contains the expected and received counts. The broker leaves the connection open for `STORAGE_UNAVAILABLE` and `INVALID_OFFSET`. `--host` defaults to `127.0.0.1` and `--port` to `55123`.
 
 ### Generate TLS certificates
 
-TLS is part of the target architecture and is not active in protocol version 2.
-
-```bash
-# TODO: keytool scripts under config/
-```
+TLS is part of the target architecture and is not active in protocol version 3.
 
 ### Query the admin API
 
 The admin API is part of the target architecture and is not served yet.
-
-```bash
-# TODO
-curl http://localhost:8080/metrics
-```
 
 ---
 

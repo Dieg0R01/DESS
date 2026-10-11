@@ -105,8 +105,15 @@ public final class Logging {
             if (raw == null || raw.isBlank()) {
                 return Optional.empty();
             }
+            String token = raw.toUpperCase(Locale.ROOT);
+            String name = switch (token) {
+                case "SEVERE" -> "ERROR";
+                case "WARNING" -> "WARN";
+                case "FINE" -> "DEBUG";
+                default -> token;
+            };
             try {
-                return Optional.of(LogLevel.valueOf(raw.toUpperCase(Locale.ROOT)));
+                return Optional.of(LogLevel.valueOf(name));
             } catch (IllegalArgumentException ex) {
                 return Optional.empty();
             }
