@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.util.Comparator;
+import java.util.stream.Stream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -32,7 +34,7 @@ class BrokerLifecycleTest {
     @Test
     void startOnAFreePortAcceptsAndLogsStarted() throws Exception {
         try (LogCapture logs = LogCapture.open();
-                Broker broker = Broker.start(TestConfigs.of(0, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000))) {
+                Broker broker = Broker.start(TestConfigs.of(0, 8, TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES, 30_000))) {
             long started = System.nanoTime();
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 2_000);
@@ -48,7 +50,7 @@ class BrokerLifecycleTest {
                 ServerSocket taken = new ServerSocket(0)) {
             int port = taken.getLocalPort();
             IOException failure = assertThrows(IOException.class, () -> Broker.start(TestConfigs.of(
-                    port, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000)));
+                    port, 8, TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES, 30_000)));
             assertTrue(failure.getMessage() != null && failure.getMessage().contains(Integer.toString(port)), failure.getMessage());
             assertEquals(0, logs.count("event=broker.started"));
         }
@@ -58,7 +60,7 @@ class BrokerLifecycleTest {
     void closeWithTwentyClientsStopsWithinFiveSeconds() throws Exception {
         List<ProtocolClient> clients = new ArrayList<>();
         LogCapture logs = LogCapture.open();
-        Broker broker = Broker.start(TestConfigs.of(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
+        Broker broker = Broker.start(TestConfigs.of(0, 32, TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
         try {
             for (int index = 0; index < 20; index++) {
                 ProtocolClient client = ProtocolClient.connect(broker.port());
@@ -83,7 +85,9 @@ class BrokerLifecycleTest {
     @Test
     void sigtermLogsSignalAndExitsZero() throws Exception {
         Path error = Files.createTempFile("dess-broker-err", ".txt");
-        Process process = startBroker(null, error, "--port", "0");
+        Path logs = Files.createTempDirectory("dess-broker-logs");
+        Path config = configFile(0, logs);
+        Process process = startBroker(null, error, "--config", config.toString());
         Stdout stdout = new Stdout(process);
         ProtocolClient client = null;
         try {
@@ -111,6 +115,8 @@ class BrokerLifecycleTest {
                 process.waitFor(2, TimeUnit.SECONDS);
             }
             Files.deleteIfExists(error);
+            Files.deleteIfExists(config);
+            delete(logs);
         }
     }
 
@@ -120,7 +126,9 @@ class BrokerLifecycleTest {
             int port = taken.getLocalPort();
             Path output = Files.createTempFile("dess-broker-out", ".txt");
             Path error = Files.createTempFile("dess-broker-err", ".txt");
-            Process process = startBroker(output, error, "--port", Integer.toString(port));
+            Path logs = Files.createTempDirectory("dess-broker-logs");
+            Path config = configFile(port, logs);
+            Process process = startBroker(output, error, "--config", config.toString());
             try {
                 assertTrue(process.waitFor(5, TimeUnit.SECONDS));
                 String combined = Files.readString(output) + Files.readString(error);
@@ -134,6 +142,32 @@ class BrokerLifecycleTest {
                 }
                 Files.deleteIfExists(output);
                 Files.deleteIfExists(error);
+                Files.deleteIfExists(config);
+                delete(logs);
+            }
+        }
+    }
+
+    private static Path configFile(int port, Path logDirectory) throws IOException {
+        Path file = Files.createTempFile("dess-broker-config", ".xml");
+        String document = """
+                <broker>
+                    <network><port>%d</port></network>
+                    <storage><logDirectory>%s</logDirectory></storage>
+                </broker>
+                """.formatted(port, logDirectory.toAbsolutePath());
+        Files.writeString(file, document);
+        return file;
+    }
+
+    private static void delete(Path root) throws IOException {
+        if (root == null || Files.notExists(root)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(root)) {
+            List<Path> paths = walk.sorted(Comparator.reverseOrder()).toList();
+            for (Path path : paths) {
+                Files.deleteIfExists(path);
             }
         }
     }

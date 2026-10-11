@@ -218,13 +218,13 @@ class FlowControlTest {
     }
 
     private static BrokerConfig config(int maxInFlight, int queue, int outbound, int grace, int publishWait) {
-        return config(maxInFlight, queue, outbound, grace, publishWait, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES);
+        return config(maxInFlight, queue, outbound, grace, publishWait, TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES);
     }
 
     private static BrokerConfig config(int maxInFlight, int queue, int outbound, int grace, int publishWait, int maxPayload) {
         return TestConfigs.full(0, 32, maxPayload, 120_000,
                 maxInFlight, queue, outbound, grace, publishWait,
-                BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS, true, List.of());
+                TestConfigs.DEFAULT_ACK_TIMEOUT_MILLIS, true, List.of());
     }
 
     private static void arm(ProtocolClient... clients) throws IOException {

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<broker>
+    <network>
+        <port>55123</port>
+        <maxConnections>128</maxConnections>
+        <maxPayloadBytes>1048576</maxPayloadBytes>
+        <idleTimeoutMs>30000</idleTimeoutMs>
+    </network>
+    <engine>
+        <maxInFlight>10000</maxInFlight>
+        <topicQueueCapacity>1024</topicQueueCapacity>
+        <outboundCapacity>256</outboundCapacity>
+        <slowConsumerGraceMs>2000</slowConsumerGraceMs>
+        <publishWaitMs>1000</publishWaitMs>
+        <ackTimeoutMs>5000</ackTimeoutMs>
+        <threadKeepAliveMs>1000</threadKeepAliveMs>
+        <shutdownTimeoutMs>2000</shutdownTimeoutMs>
+    </engine>
+    <storage>
+        <logDirectory>./data/logs</logDirectory>
+        <durability>ALWAYS</durability>
+        <syncIntervalMs>1000</syncIntervalMs>
+    </storage>
+    <topics autoCreate="true">
+        <topic>sales</topic>
+    </topics>
+    <logging>
+        <level>INFO</level>
+    </logging>
+</broker>

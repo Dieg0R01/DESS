@@ -16,7 +16,7 @@ public final class BrokerHarness implements AutoCloseable {
     }
 
     public static BrokerHarness start() {
-        return start(TestConfigs.of(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
+        return start(TestConfigs.of(0, 128, TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
     }
 
     public static BrokerHarness start(BrokerConfig config) {

@@ -25,7 +25,11 @@ final class LogDirectory implements AutoCloseable {
     }
 
     static LogDirectory acquire(Path directory) throws IOException {
-        Files.createDirectories(directory);
+        try {
+            Files.createDirectories(directory);
+        } catch (IOException ex) {
+            throw new IOException("Could not create log directory " + directory.toAbsolutePath(), ex);
+        }
         Path lockFile = directory.resolve("broker.lock");
         FileChannel channel = FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         FileLock lock;

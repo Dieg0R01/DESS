@@ -1,7 +1,6 @@
 package dev.dess.broker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,30 +9,6 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class BrokerConfigTest {
-
-    @Test
-    void defaultsFillEveryFieldFromTheDocumentedConstants() {
-        BrokerConfig config = BrokerConfig.defaults();
-        assertEquals(BrokerConfig.DEFAULT_PORT, config.port());
-        assertEquals(BrokerConfig.DEFAULT_MAX_CONNECTIONS, config.maxConnections());
-        assertEquals(BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, config.maxPayloadBytes());
-        assertEquals(BrokerConfig.DEFAULT_IDLE_TIMEOUT_MILLIS, config.idleTimeoutMillis());
-        assertEquals(10_000, config.maxInFlight());
-        assertEquals(1024, config.topicQueueCapacity());
-        assertEquals(256, config.outboundCapacity());
-        assertEquals(2_000, config.slowConsumerGraceMillis());
-        assertEquals(1_000, config.publishWaitMillis());
-        assertEquals(5_000, config.ackTimeoutMillis());
-        assertTrue(config.autoCreateTopics());
-        assertEquals(List.of(), config.topics());
-        assertEquals(Path.of("data", "logs"), config.logDirectory());
-        assertEquals(Durability.ALWAYS, config.durability());
-        assertEquals(1_000, config.syncIntervalMillis());
-        assertEquals("INFO", config.logLevel());
-        assertEquals(1_000, config.threadKeepAliveMillis());
-        assertEquals(2_000, config.shutdownTimeoutMillis());
-        assertNull(config.configPath());
-    }
 
     @Test
     void testConfigsUseAnIntervalLogAndAPrivateDirectory() {

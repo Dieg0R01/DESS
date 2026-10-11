@@ -27,36 +27,6 @@ public record BrokerConfig(
         int shutdownTimeoutMillis,
         Path configPath) {
 
-    public static final int DEFAULT_PORT = 55123;
-
-    public static final int DEFAULT_MAX_CONNECTIONS = 128;
-
-    public static final int DEFAULT_MAX_PAYLOAD_BYTES = 1048576;
-
-    public static final int DEFAULT_IDLE_TIMEOUT_MILLIS = 30000;
-
-    public static final int DEFAULT_MAX_IN_FLIGHT = 10000;
-
-    public static final int DEFAULT_TOPIC_QUEUE_CAPACITY = 1024;
-
-    public static final int DEFAULT_OUTBOUND_CAPACITY = 256;
-
-    public static final int DEFAULT_SLOW_CONSUMER_GRACE_MILLIS = 2000;
-
-    public static final int DEFAULT_PUBLISH_WAIT_MILLIS = 1000;
-
-    public static final int DEFAULT_ACK_TIMEOUT_MILLIS = 5000;
-
-    public static final Path DEFAULT_LOG_DIRECTORY = Path.of("data", "logs");
-
-    public static final int DEFAULT_SYNC_INTERVAL_MILLIS = 1000;
-
-    public static final String DEFAULT_LOG_LEVEL = "INFO";
-
-    public static final int DEFAULT_THREAD_KEEP_ALIVE_MILLIS = 1000;
-
-    public static final int DEFAULT_SHUTDOWN_TIMEOUT_MILLIS = 2000;
-
     private static final Set<String> LOG_LEVELS = Set.of("SEVERE", "WARNING", "INFO", "FINE");
 
     public BrokerConfig {
@@ -124,28 +94,5 @@ public record BrokerConfig(
             }
         }
         topics = List.copyOf(unique);
-    }
-
-    public static BrokerConfig defaults() {
-        return new BrokerConfig(
-                DEFAULT_PORT,
-                DEFAULT_MAX_CONNECTIONS,
-                DEFAULT_MAX_PAYLOAD_BYTES,
-                DEFAULT_IDLE_TIMEOUT_MILLIS,
-                DEFAULT_MAX_IN_FLIGHT,
-                DEFAULT_TOPIC_QUEUE_CAPACITY,
-                DEFAULT_OUTBOUND_CAPACITY,
-                DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
-                DEFAULT_PUBLISH_WAIT_MILLIS,
-                DEFAULT_ACK_TIMEOUT_MILLIS,
-                true,
-                List.of(),
-                DEFAULT_LOG_DIRECTORY,
-                Durability.ALWAYS,
-                DEFAULT_SYNC_INTERVAL_MILLIS,
-                DEFAULT_LOG_LEVEL,
-                DEFAULT_THREAD_KEEP_ALIVE_MILLIS,
-                DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
-                null);
     }
 }

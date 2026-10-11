@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+    <xs:element name="broker" type="broker"/>
+
+    <xs:complexType name="broker">
+        <xs:all>
+            <xs:element name="network" type="network" minOccurs="0"/>
+            <xs:element name="engine" type="engine" minOccurs="0"/>
+            <xs:element name="storage" type="storage" minOccurs="0"/>
+            <xs:element name="topics" type="topics" minOccurs="0"/>
+            <xs:element name="logging" type="logging" minOccurs="0"/>
+        </xs:all>
+    </xs:complexType>
+
+    <xs:complexType name="network">
+        <xs:all>
+            <xs:element name="port" type="xs:int" minOccurs="0"/>
+            <xs:element name="maxConnections" type="xs:int" minOccurs="0"/>
+            <xs:element name="maxPayloadBytes" type="xs:int" minOccurs="0"/>
+            <xs:element name="idleTimeoutMs" type="xs:int" minOccurs="0"/>
+        </xs:all>
+    </xs:complexType>
+
+    <xs:complexType name="engine">
+        <xs:all>
+            <xs:element name="maxInFlight" type="xs:int" minOccurs="0"/>
+            <xs:element name="topicQueueCapacity" type="xs:int" minOccurs="0"/>
+            <xs:element name="outboundCapacity" type="xs:int" minOccurs="0"/>
+            <xs:element name="slowConsumerGraceMs" type="xs:int" minOccurs="0"/>
+            <xs:element name="publishWaitMs" type="xs:int" minOccurs="0"/>
+            <xs:element name="ackTimeoutMs" type="xs:int" minOccurs="0"/>
+            <xs:element name="threadKeepAliveMs" type="xs:int" minOccurs="0"/>
+            <xs:element name="shutdownTimeoutMs" type="xs:int" minOccurs="0"/>
+        </xs:all>
+    </xs:complexType>
+
+    <xs:complexType name="storage">
+        <xs:all>
+            <xs:element name="logDirectory" type="xs:string" minOccurs="0"/>
+            <xs:element name="durability" type="durability" minOccurs="0"/>
+            <xs:element name="syncIntervalMs" type="xs:int" minOccurs="0"/>
+        </xs:all>
+    </xs:complexType>
+
+    <xs:complexType name="topics">
+        <xs:sequence>
+            <xs:element name="topic" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="autoCreate" type="xs:boolean"/>
+    </xs:complexType>
+
+    <xs:complexType name="logging">
+        <xs:all>
+            <xs:element name="level" type="xs:string" minOccurs="0"/>
+        </xs:all>
+    </xs:complexType>
+
+    <xs:simpleType name="durability">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="ALWAYS"/>
+            <xs:enumeration value="INTERVAL"/>
+        </xs:restriction>
+    </xs:simpleType>
+</xs:schema>

@@ -281,6 +281,27 @@ Frameworks that would hide the distributed-systems mechanics (Spring, Netty, Kaf
 
 The broker reads its settings from `config.xml` at startup, mapped to Java objects through JAXB (`@XmlRootElement`, `@XmlElement`, `Unmarshaller`). Runtime changes, such as topics created through the API, can be written back with a `Marshaller`.
 
+| Setting | Default |
+|---------|---------|
+| port | 55123 |
+| maxConnections | 128 |
+| maxPayloadBytes | 1048576 |
+| idleTimeoutMs | 30000 |
+| maxInFlight | 10000 |
+| topicQueueCapacity | 1024 |
+| outboundCapacity | 256 |
+| slowConsumerGraceMs | 2000 |
+| publishWaitMs | 1000 |
+| ackTimeoutMs | 5000 |
+| threadKeepAliveMs | 1000 |
+| shutdownTimeoutMs | 2000 |
+| autoCreate | true |
+| topics | |
+| logDirectory | ./data/logs |
+| durability | ALWAYS |
+| syncIntervalMs | 1000 |
+| level | INFO |
+
 Tentative shape:
 
 ```xml

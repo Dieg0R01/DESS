@@ -31,7 +31,7 @@ class SlowConsumerTest {
 
     @Test
     void fastSubscribersKeepTheirRateBesideASlowReader() throws Exception {
-        BrokerConfig config = config(1024, 1024, BrokerConfig.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS);
+        BrokerConfig config = config(1024, 1024, TestConfigs.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS);
         long baseline = meanBatchNanos(config, 0L);
         long[] best = {Long.MAX_VALUE};
         boolean passed = false;
@@ -276,9 +276,9 @@ class SlowConsumerTest {
     }
 
     private static BrokerConfig config(int outbound, int queue, int grace) {
-        return TestConfigs.full(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
-                BrokerConfig.DEFAULT_MAX_IN_FLIGHT, queue, outbound, grace,
-                BrokerConfig.DEFAULT_PUBLISH_WAIT_MILLIS, BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS,
+        return TestConfigs.full(0, 32, TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
+                TestConfigs.DEFAULT_MAX_IN_FLIGHT, queue, outbound, grace,
+                TestConfigs.DEFAULT_PUBLISH_WAIT_MILLIS, TestConfigs.DEFAULT_ACK_TIMEOUT_MILLIS,
                 true, List.of());
     }
 

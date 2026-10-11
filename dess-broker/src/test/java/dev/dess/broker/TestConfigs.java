@@ -8,6 +8,20 @@ import java.util.List;
 
 public final class TestConfigs {
 
+    public static final int DEFAULT_MAX_PAYLOAD_BYTES = 1048576;
+
+    public static final int DEFAULT_MAX_IN_FLIGHT = 10000;
+
+    public static final int DEFAULT_TOPIC_QUEUE_CAPACITY = 1024;
+
+    public static final int DEFAULT_OUTBOUND_CAPACITY = 256;
+
+    public static final int DEFAULT_SLOW_CONSUMER_GRACE_MILLIS = 2000;
+
+    public static final int DEFAULT_PUBLISH_WAIT_MILLIS = 1000;
+
+    public static final int DEFAULT_ACK_TIMEOUT_MILLIS = 5000;
+
     private TestConfigs() {
     }
 
@@ -15,14 +29,14 @@ public final class TestConfigs {
         return new BrokerConfig(
                 0,
                 32,
-                BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES,
+                TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES,
                 120_000,
-                BrokerConfig.DEFAULT_MAX_IN_FLIGHT,
-                BrokerConfig.DEFAULT_TOPIC_QUEUE_CAPACITY,
-                BrokerConfig.DEFAULT_OUTBOUND_CAPACITY,
-                BrokerConfig.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
-                BrokerConfig.DEFAULT_PUBLISH_WAIT_MILLIS,
-                BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS,
+                TestConfigs.DEFAULT_MAX_IN_FLIGHT,
+                TestConfigs.DEFAULT_TOPIC_QUEUE_CAPACITY,
+                TestConfigs.DEFAULT_OUTBOUND_CAPACITY,
+                TestConfigs.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
+                TestConfigs.DEFAULT_PUBLISH_WAIT_MILLIS,
+                TestConfigs.DEFAULT_ACK_TIMEOUT_MILLIS,
                 true,
                 List.of(),
                 logDirectory,
@@ -36,12 +50,12 @@ public final class TestConfigs {
 
     public static BrokerConfig of(int port, int maxConnections, int maxPayloadBytes, int idleTimeoutMillis) {
         return full(port, maxConnections, maxPayloadBytes, idleTimeoutMillis,
-                BrokerConfig.DEFAULT_MAX_IN_FLIGHT,
-                BrokerConfig.DEFAULT_TOPIC_QUEUE_CAPACITY,
-                BrokerConfig.DEFAULT_OUTBOUND_CAPACITY,
-                BrokerConfig.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
-                BrokerConfig.DEFAULT_PUBLISH_WAIT_MILLIS,
-                BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS,
+                TestConfigs.DEFAULT_MAX_IN_FLIGHT,
+                TestConfigs.DEFAULT_TOPIC_QUEUE_CAPACITY,
+                TestConfigs.DEFAULT_OUTBOUND_CAPACITY,
+                TestConfigs.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
+                TestConfigs.DEFAULT_PUBLISH_WAIT_MILLIS,
+                TestConfigs.DEFAULT_ACK_TIMEOUT_MILLIS,
                 true,
                 List.of());
     }

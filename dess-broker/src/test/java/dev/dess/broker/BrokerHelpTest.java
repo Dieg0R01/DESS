@@ -38,18 +38,14 @@ class BrokerHelpTest {
         assertEquals("", unknown.stdout());
         assertUsage(unknown.stderr(), "dess-broker");
 
-        Result missing = run("--port");
+        Result missing = run("--config");
         assertEquals(2, missing.exitCode());
         assertEquals("", missing.stdout());
         assertUsage(missing.stderr(), "dess-broker");
 
-        Result badAuto = run("--auto-create-topics", "maybe");
-        assertEquals(2, badAuto.exitCode());
-        assertUsage(badAuto.stderr(), "dess-broker");
-
-        Result oversizedOutbound = run("--outbound-capacity", "2000", "--topic-queue-capacity", "10");
-        assertEquals(2, oversizedOutbound.exitCode());
-        assertUsage(oversizedOutbound.stderr(), "dess-broker");
+        Result repeated = run("--config", "a.xml", "--config", "b.xml");
+        assertEquals(2, repeated.exitCode());
+        assertUsage(repeated.stderr(), "dess-broker");
     }
 
     private static void assertHelp(String stdout, String artifact) {

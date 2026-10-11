@@ -101,9 +101,13 @@ public final class Broker implements AutoCloseable {
         recovered.put("truncatedRecords", Integer.toString(logs.truncatedRecords()));
         recovered.put("durationMs", Long.toString(logs.durationMs()));
         Logging.event("dev.dess.broker", "log.recovered", recovered);
+        logEffective();
         Map<String, String> started = new LinkedHashMap<>();
         started.put("version", Integer.toString(FrameCodec.PROTOCOL_VERSION));
         started.put("tcpPort", Integer.toString(serverSocket.getLocalPort()));
+        if (config.configPath() != null) {
+            started.put("configPath", config.configPath().toAbsolutePath().toString());
+        }
         Logging.event("dev.dess.broker", "broker.started", started);
         this.acceptThread.start();
     }
@@ -122,6 +126,29 @@ public final class Broker implements AutoCloseable {
         } catch (IOException ex) {
             failure.addSuppressed(ex);
         }
+    }
+
+    private void logEffective() {
+        Map<String, String> effective = new LinkedHashMap<>();
+        effective.put("port", Integer.toString(config.port()));
+        effective.put("maxConnections", Integer.toString(config.maxConnections()));
+        effective.put("maxPayloadBytes", Integer.toString(config.maxPayloadBytes()));
+        effective.put("idleTimeoutMillis", Integer.toString(config.idleTimeoutMillis()));
+        effective.put("maxInFlight", Integer.toString(config.maxInFlight()));
+        effective.put("topicQueueCapacity", Integer.toString(config.topicQueueCapacity()));
+        effective.put("outboundCapacity", Integer.toString(config.outboundCapacity()));
+        effective.put("slowConsumerGraceMillis", Integer.toString(config.slowConsumerGraceMillis()));
+        effective.put("publishWaitMillis", Integer.toString(config.publishWaitMillis()));
+        effective.put("ackTimeoutMillis", Integer.toString(config.ackTimeoutMillis()));
+        effective.put("threadKeepAliveMillis", Integer.toString(config.threadKeepAliveMillis()));
+        effective.put("shutdownTimeoutMillis", Integer.toString(config.shutdownTimeoutMillis()));
+        effective.put("autoCreateTopics", Boolean.toString(config.autoCreateTopics()));
+        effective.put("logDirectory", config.logDirectory().toAbsolutePath().toString());
+        effective.put("durability", config.durability().name());
+        effective.put("syncIntervalMillis", Integer.toString(config.syncIntervalMillis()));
+        effective.put("logLevel", config.logLevel());
+        effective.put("topics", String.join(",", config.topics()));
+        Logging.event("dev.dess.broker", "config.effective", effective);
     }
 
     private static ServerSocket bind(int port) throws IOException {
