@@ -83,11 +83,20 @@ class HandshakeTest {
     }
 
     @Test
-    void handshakeWithoutAClientCertificateIsDeferredUntilClientAuth() {
-        // T014: a handshake that sends no client certificate is NO_CERTIFICATE
-        // and has no client.connected.
-        // assertTrue(logs.await(..., "event=tls.handshake.failed", "reason=NO_CERTIFICATE"));
-        // assertEquals(0, logs.count("event=client.connected"));
+    void handshakeWithoutAClientCertificateIsRejected() throws Exception {
+        try (LogCapture logs = LogCapture.open();
+                BrokerHarness harness = BrokerHarness.start();
+                SSLSocket socket = TestPki.anonymousSocket(harness.port())) {
+            String remote = socket.getLocalAddress().getHostAddress() + ":" + socket.getLocalPort();
+            try {
+                socket.startHandshake();
+            } catch (Exception ex) {
+                // TLS 1.3 may finish on the client before the broker closes.
+            }
+            assertTrue(logs.await(Duration.ofSeconds(2), "event=tls.handshake.failed", "reason=NO_CERTIFICATE",
+                    "remoteAddress=" + remote), logs.lines()::toString);
+            assertEquals(0, logs.count("event=client.connected"));
+        }
     }
 
     @Test

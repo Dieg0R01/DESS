@@ -127,6 +127,26 @@ public final class TestPki {
         }
     }
 
+    public static SSLSocket anonymousSocket(int port) throws IOException {
+        try {
+            KeyStore trusted = store(trustStore(), password());
+            TrustManagerFactory trustFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            trustFactory.init(trusted);
+            SSLContext context = SSLContext.getInstance("TLS");
+            context.init(null, trustFactory.getTrustManagers(), null);
+            SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket();
+            socket.setTcpNoDelay(true);
+            socket.setEnabledProtocols(TlsMaterial.PROTOCOLS);
+            SSLParameters parameters = socket.getSSLParameters();
+            parameters.setEndpointIdentificationAlgorithm(null);
+            socket.setSSLParameters(parameters);
+            socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 2_000);
+            return socket;
+        } catch (GeneralSecurityException ex) {
+            throw new IOException(ex);
+        }
+    }
+
     public static SSLSocket clientSocket(int port) throws IOException {
         return clientSocket(port, producerStore(), trustStore(), passwordFile());
     }

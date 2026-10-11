@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.nio.file.Path;
 import javax.net.ssl.SSLSocket;
 
 public final class ProtocolClient implements AutoCloseable {
@@ -26,7 +27,11 @@ public final class ProtocolClient implements AutoCloseable {
     }
 
     public static ProtocolClient connect(int port) throws IOException {
-        SSLSocket socket = TestPki.clientSocket(port);
+        return connect(port, TestPki.producerStore());
+    }
+
+    public static ProtocolClient connect(int port, Path identity) throws IOException {
+        SSLSocket socket = TestPki.clientSocket(port, identity, TestPki.trustStore(), TestPki.passwordFile());
         socket.startHandshake();
         return new ProtocolClient(socket);
     }

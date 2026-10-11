@@ -20,6 +20,10 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.SSLPeerUnverifiedException;
+import javax.net.ssl.SSLSocket;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -80,6 +84,8 @@ public final class ClientConnection implements Runnable {
     private boolean handshakeFailed;
 
     private boolean tlsCompleted;
+
+    private ClientIdentity identity;
 
     ClientConnection(long id, Socket socket, BrokerConfig config, TopicRegistry registry, Broker broker, Semaphore permits, TlsMaterial tls) throws IOException {
         this.id = id;
@@ -277,8 +283,18 @@ public final class ClientConnection implements Runnable {
         }
         socket = outcome.socket();
         try {
+            identity = peerIdentity((SSLSocket) socket);
+            if (identity == null) {
+                handshakeFailed = true;
+                Broker.logHandshakeFailed(remoteAddress, HandshakeReason.NO_CERTIFICATE, null);
+                return false;
+            }
             input = socket.getInputStream();
             output = socket.getOutputStream();
+        } catch (IllegalArgumentException ex) {
+            handshakeFailed = true;
+            Broker.logHandshakeFailed(remoteAddress, HandshakeReason.UNTRUSTED, null);
+            return false;
         } catch (IOException ex) {
             handshakeFailed = true;
             Broker.logHandshakeFailed(remoteAddress, HandshakeReason.FAILED, ex.getMessage());
@@ -287,6 +303,18 @@ public final class ClientConnection implements Runnable {
         tlsCompleted = true;
         state = State.HANDSHAKING;
         return true;
+    }
+
+    private static ClientIdentity peerIdentity(SSLSocket ssl) {
+        try {
+            Certificate[] chain = ssl.getSession().getPeerCertificates();
+            if (chain.length == 0 || !(chain[0] instanceof X509Certificate leaf)) {
+                return null;
+            }
+            return ClientIdentity.parse(leaf);
+        } catch (SSLPeerUnverifiedException ex) {
+            return null;
+        }
     }
 
     private void handle(Frame frame) throws IOException {
@@ -333,6 +361,8 @@ public final class ClientConnection implements Runnable {
         properties.put("clientId", Long.toString(id));
         properties.put("remoteAddress", remoteAddress);
         properties.put("protocolVersion", Integer.toString(FrameCodec.PROTOCOL_VERSION));
+        properties.put("identity", identity.name());
+        properties.put("roles", identity.rolesText());
         Logging.event("dev.dess.broker", "client.connected", properties);
         broker.startWriter(this);
     }
@@ -405,6 +435,10 @@ public final class ClientConnection implements Runnable {
         }
         if (payload.length > config.maxPayloadBytes()) {
             reject(topic, ErrorCode.PAYLOAD_TOO_LARGE, "payload is too large");
+            return;
+        }
+        if (!identity.mayPublish()) {
+            reject(topic, ErrorCode.UNAUTHORIZED, "unauthorized");
             return;
         }
         Topic channel;
@@ -549,6 +583,7 @@ public final class ClientConnection implements Runnable {
         properties.put("topic", topic.length() <= 64 ? topic : "-");
         properties.put("errorCode", code.name());
         properties.put("clientId", Long.toString(id));
+        properties.put("identity", identity.name());
         Logging.event("dev.dess.broker", "message.rejected", properties);
         writeError(code, reason);
     }
