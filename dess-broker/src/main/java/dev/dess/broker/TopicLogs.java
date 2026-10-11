@@ -35,6 +35,17 @@ final class TopicLogs {
         this.durationMs = durationMs;
     }
 
+    static void deleteTemporary(Path directory) throws IOException {
+        try (DirectoryStream<Path> children = Files.newDirectoryStream(directory)) {
+            for (Path child : children) {
+                String name = child.getFileName().toString();
+                if (name.endsWith(".tmp") && Files.isRegularFile(child)) {
+                    Files.deleteIfExists(child);
+                }
+            }
+        }
+    }
+
     static TopicLogs open(Path directory, Durability durability) throws IOException {
         long started = System.nanoTime();
         Files.createDirectories(directory);

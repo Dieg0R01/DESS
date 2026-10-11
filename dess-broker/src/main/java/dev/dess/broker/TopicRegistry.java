@@ -23,6 +23,8 @@ public final class TopicRegistry {
 
     private final TopicLogs logs;
 
+    private final ConfigWriter writer;
+
     private final ConcurrentHashMap<String, Topic> topics = new ConcurrentHashMap<>();
 
     /**
@@ -32,13 +34,14 @@ public final class TopicRegistry {
      */
     private final ConcurrentHashMap<PendingKey, PendingConfirmation> pending = new ConcurrentHashMap<>();
 
-    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, boolean autoCreate, Consumer<Subscription> onFull, TopicLogs logs) {
+    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, boolean autoCreate, Consumer<Subscription> onFull, TopicLogs logs, ConfigWriter writer) {
         this.topicQueueCapacity = topicQueueCapacity;
         this.outboundCapacity = outboundCapacity;
         this.flow = flow;
         this.autoCreate = autoCreate;
         this.onFull = onFull;
         this.logs = logs;
+        this.writer = writer;
         for (TopicLog recovered : logs.recovered()) {
             topics.put(recovered.topic(), topic(recovered));
             Map<String, String> properties = new LinkedHashMap<>();
@@ -88,6 +91,10 @@ public final class TopicRegistry {
         return topics.containsKey(name);
     }
 
+    Set<String> names() {
+        return Set.copyOf(topics.keySet());
+    }
+
     Set<Long> subscribers(String name) {
         Topic topic = topics.get(name);
         if (topic == null) {
@@ -99,22 +106,36 @@ public final class TopicRegistry {
     private Topic resolve(String name, boolean create, String source) throws IOException {
         Topic existing = topics.get(name);
         if (existing != null) {
+            writer.remember(name);
             return existing;
         }
         if (!create) {
             return null;
         }
-        TopicLog log = logs.openOrCreate(name);
-        Topic created = topic(log);
-        Topic prior = topics.putIfAbsent(name, created);
-        if (prior != null) {
-            return prior;
+        writer.lock();
+        try {
+            existing = topics.get(name);
+            if (existing != null) {
+                writer.remember(name);
+                return existing;
+            }
+            TopicLog log = logs.openOrCreate(name);
+            Topic created = topic(log);
+            topics.put(name, created);
+            try {
+                writer.remember(name);
+            } catch (IOException ex) {
+                topics.remove(name, created);
+                throw ex;
+            }
+            Map<String, String> properties = new LinkedHashMap<>();
+            properties.put("topic", name);
+            properties.put("source", source);
+            event("topic.created", properties);
+            return created;
+        } finally {
+            writer.unlock();
         }
-        Map<String, String> properties = new LinkedHashMap<>();
-        properties.put("topic", name);
-        properties.put("source", source);
-        event("topic.created", properties);
-        return created;
     }
 
     private Topic topic(TopicLog log) {

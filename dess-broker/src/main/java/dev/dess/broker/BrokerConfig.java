@@ -93,6 +93,12 @@ public record BrokerConfig(
                 unique.add(name);
             }
         }
-        topics = List.copyOf(unique);
+        topics = unique;
+    }
+
+    void remember(String name) {
+        if (!topics.contains(name)) {
+            topics.add(name);
+        }
     }
 }

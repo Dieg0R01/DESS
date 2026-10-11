@@ -56,16 +56,19 @@ public final class Broker implements AutoCloseable {
         try {
             this.directory = LogDirectory.acquire(config.logDirectory());
             try {
+                TopicLogs.deleteTemporary(config.logDirectory());
                 this.logs = TopicLogs.open(config.logDirectory(), config.durability());
             } catch (IOException ex) {
                 closeDirectory(directory, ex);
                 throw ex;
             }
-            this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck, logs);
+            ConfigWriter writer = new ConfigWriter(config);
+            this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck, logs, writer);
             try {
-                for (String name : config.topics()) {
+                for (String name : List.copyOf(config.topics())) {
                     registry.declare(name);
                 }
+                writer.includeRecovered(registry.names());
                 this.permits = new Semaphore(config.maxConnections());
                 this.serverSocket = bind(config.port());
             } catch (IOException ex) {
