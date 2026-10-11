@@ -3,7 +3,10 @@ package dev.dess.broker;
 import dev.dess.common.logging.Logging;
 import dev.dess.common.protocol.StartPosition;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -93,6 +96,19 @@ public final class TopicRegistry {
 
     Set<String> names() {
         return Set.copyOf(topics.keySet());
+    }
+
+    List<TopicSummary> summaries() {
+        ArrayList<String> ordered = new ArrayList<>(topics.keySet());
+        Collections.sort(ordered);
+        ArrayList<TopicSummary> summaries = new ArrayList<>(ordered.size());
+        for (String name : ordered) {
+            Topic topic = topics.get(name);
+            if (topic != null) {
+                summaries.add(topic.summary());
+            }
+        }
+        return summaries;
     }
 
     Set<Long> subscribers(String name) {

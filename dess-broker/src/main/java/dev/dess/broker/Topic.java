@@ -70,6 +70,16 @@ final class Topic {
         return name;
     }
 
+    TopicSummary summary() {
+        lock.lock();
+        try {
+            int depth = ring == null ? 0 : (int) (nextOffset + inflight - baseOffset);
+            return new TopicSummary(name, log.nextOffset(), subscriptions.size(), depth);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     Set<Long> subscribers() {
         lock.lock();
         try {

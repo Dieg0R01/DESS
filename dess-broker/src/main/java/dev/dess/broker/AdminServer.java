@@ -9,7 +9,9 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -31,13 +33,20 @@ final class AdminServer implements AutoCloseable {
 
     private final Supplier<BrokerHealth> health;
 
-    private AdminServer(HttpServer server, ThreadPoolExecutor executor, Supplier<BrokerHealth> health) {
+    private final Supplier<List<TopicSummary>> topics;
+
+    private AdminServer(HttpServer server, ThreadPoolExecutor executor, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics) {
         this.server = server;
         this.executor = executor;
         this.health = health;
+        this.topics = topics;
     }
 
     static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health) throws IOException {
+        return open(bindAddress, port, health, List::of);
+    }
+
+    static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics) throws IOException {
         InetAddress address;
         try {
             address = InetAddress.getByName(bindAddress);
@@ -63,7 +72,7 @@ final class AdminServer implements AutoCloseable {
                     return thread;
                 },
                 new ThreadPoolExecutor.CallerRunsPolicy());
-        AdminServer admin = new AdminServer(server, executor, health);
+        AdminServer admin = new AdminServer(server, executor, health, topics);
         server.createContext("/", admin::handle);
         server.setExecutor(executor);
         server.start();
@@ -110,7 +119,10 @@ final class AdminServer implements AutoCloseable {
         String method = exchange.getRequestMethod();
         String path = path(exchange);
         if ("/topics".equals(path)) {
-            if ("GET".equals(method) || "POST".equals(method)) {
+            if ("GET".equals(method)) {
+                return send(exchange, 200, topicsBody(), null);
+            }
+            if ("POST".equals(method)) {
                 return send(exchange, 404, error("NOT_FOUND", "Not found"), null);
             }
             return send(exchange, 405, error("METHOD_NOT_ALLOWED", "Method not allowed"), "GET, POST");
@@ -121,7 +133,13 @@ final class AdminServer implements AutoCloseable {
             }
             return send(exchange, 405, error("METHOD_NOT_ALLOWED", "Method not allowed"), "DELETE");
         }
-        if ("/metrics".equals(path) || "/health".equals(path)) {
+        if ("/health".equals(path)) {
+            if ("GET".equals(method)) {
+                return send(exchange, 200, statusBody("UP"), null);
+            }
+            return send(exchange, 405, error("METHOD_NOT_ALLOWED", "Method not allowed"), "GET");
+        }
+        if ("/metrics".equals(path)) {
             if ("GET".equals(method)) {
                 return send(exchange, 404, error("NOT_FOUND", "Not found"), null);
             }
@@ -144,6 +162,16 @@ final class AdminServer implements AutoCloseable {
             return "/";
         }
         return path;
+    }
+
+    private Map<String, Object> topicsBody() {
+        ArrayList<Map<String, Object>> items = new ArrayList<>();
+        for (TopicSummary summary : topics.get()) {
+            items.add(summary.toJson());
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("topics", items);
+        return body;
     }
 
     private static Map<String, Object> statusBody(String status) {

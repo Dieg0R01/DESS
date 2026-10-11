@@ -102,7 +102,7 @@ public final class Broker implements AutoCloseable {
                 }
                 AdminServer adminServer;
                 try {
-                    adminServer = AdminServer.open(config.adminBindAddress(), config.adminPort(), this::health);
+                    adminServer = AdminServer.open(config.adminBindAddress(), config.adminPort(), this::health, registry::summaries);
                 } catch (IOException ex) {
                     if (tracker != null) {
                         tracker.close(config.shutdownTimeoutMillis());
@@ -259,6 +259,10 @@ public final class Broker implements AutoCloseable {
 
     Set<Long> subscribers(String name) {
         return registry.subscribers(name);
+    }
+
+    List<TopicSummary> summaries() {
+        return registry.summaries();
     }
 
     public int port() {
