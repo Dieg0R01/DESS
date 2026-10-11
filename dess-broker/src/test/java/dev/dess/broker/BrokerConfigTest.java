@@ -22,6 +22,12 @@ class BrokerConfigTest {
         assertEquals(1_000, config.threadKeepAliveMillis());
         assertEquals(2_000, config.shutdownTimeoutMillis());
         assertTrue(config.logDirectory().toString().contains("dess-test-log"));
+        assertEquals(TestPki.brokerStore(), config.keyStore());
+        assertEquals(TestPki.trustStore(), config.trustStore());
+        assertEquals(TestPki.passwordFile(), config.passwordFile());
+        assertEquals(false, config.discoveryEnabled());
+        assertEquals(55124, config.discoveryPort());
+        assertEquals(false, config.presenceEnabled());
     }
 
     @Test
@@ -38,6 +44,11 @@ class BrokerConfigTest {
         assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "DEBUG", 1_000, 2_000));
         assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 0, 2_000));
         assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 0));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, null, TestPki.trustStore(), TestPki.passwordFile(), 55124));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), null, TestPki.passwordFile(), 55124));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), null, 55124));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), -1));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), 65536));
         assertThrows(IllegalArgumentException.class, () -> full(10, 1024, 256, 1_000, 5_000, List.of("Sales")));
 
         BrokerConfig zeroWait = full(10, 1024, 256, 0, 5_000, List.of());
@@ -65,7 +76,32 @@ class BrokerConfigTest {
             String logLevel,
             int threadKeepAliveMillis,
             int shutdownTimeoutMillis) {
+        return stored(inFlight, capacity, outbound, grace, publishWait, ackTimeout, autoCreate, topics,
+                logDirectory, durability, syncIntervalMillis, logLevel, threadKeepAliveMillis, shutdownTimeoutMillis,
+                TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), 55124);
+    }
+
+    private static BrokerConfig stored(
+            int inFlight,
+            int capacity,
+            int outbound,
+            int grace,
+            int publishWait,
+            int ackTimeout,
+            boolean autoCreate,
+            List<String> topics,
+            Path logDirectory,
+            Durability durability,
+            int syncIntervalMillis,
+            String logLevel,
+            int threadKeepAliveMillis,
+            int shutdownTimeoutMillis,
+            Path keyStore,
+            Path trustStore,
+            Path passwordFile,
+            int discoveryPort) {
         return new BrokerConfig(0, 8, 4, 30_000, inFlight, capacity, outbound, grace, publishWait, ackTimeout, autoCreate, topics,
-                logDirectory, durability, syncIntervalMillis, logLevel, threadKeepAliveMillis, shutdownTimeoutMillis, null);
+                logDirectory, durability, syncIntervalMillis, logLevel, threadKeepAliveMillis, shutdownTimeoutMillis,
+                keyStore, trustStore, passwordFile, false, discoveryPort, false, null);
     }
 }

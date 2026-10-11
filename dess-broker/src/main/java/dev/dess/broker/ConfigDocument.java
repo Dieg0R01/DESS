@@ -26,6 +26,12 @@ public final class ConfigDocument {
     @XmlElement
     Logging logging;
 
+    @XmlElement
+    Security security;
+
+    @XmlElement
+    Discovery discovery;
+
     public ConfigDocument() {
     }
 
@@ -115,6 +121,38 @@ public final class ConfigDocument {
         String level;
 
         public Logging() {
+        }
+    }
+
+    @XmlAccessorType(XmlAccessType.FIELD)
+    public static final class Security {
+
+        @XmlElement
+        String keyStore;
+
+        @XmlElement
+        String trustStore;
+
+        @XmlElement
+        String passwordFile;
+
+        public Security() {
+        }
+    }
+
+    @XmlAccessorType(XmlAccessType.FIELD)
+    public static final class Discovery {
+
+        @XmlAttribute
+        Boolean enabled;
+
+        @XmlAttribute
+        Boolean presence;
+
+        @XmlElement
+        Integer port;
+
+        public Discovery() {
         }
     }
 }

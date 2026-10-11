@@ -230,6 +230,12 @@ class ReplayTest {
                 "INFO",
                 1_000,
                 2_000,
+                TestPki.brokerStore(),
+                TestPki.trustStore(),
+                TestPki.passwordFile(),
+                false,
+                55124,
+                false,
                 null));
     }
 

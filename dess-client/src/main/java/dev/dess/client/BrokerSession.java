@@ -5,6 +5,7 @@ import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import dev.dess.common.protocol.StartPosition;
+import dev.dess.common.security.Digests;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -52,7 +53,7 @@ public final class BrokerSession implements AutoCloseable {
     }
 
     public void publish(String topic, byte[] payload, ConfirmationMode mode) throws IOException {
-        write(new Frame(Command.PUBLISH, FrameCodec.publishHeader(topic, mode), payload));
+        write(new Frame(Command.PUBLISH, FrameCodec.publishHeader(topic, mode, Digests.of(topic, payload == null ? new byte[0] : payload)), payload));
     }
 
     public void acknowledge(String topic, long offset) throws IOException {

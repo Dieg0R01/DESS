@@ -25,6 +25,12 @@ public record BrokerConfig(
         String logLevel,
         int threadKeepAliveMillis,
         int shutdownTimeoutMillis,
+        Path keyStore,
+        Path trustStore,
+        Path passwordFile,
+        boolean discoveryEnabled,
+        int discoveryPort,
+        boolean presenceEnabled,
         Path configPath) {
 
     private static final Set<String> LOG_LEVELS = Set.of("SEVERE", "WARNING", "INFO", "FINE");
@@ -83,6 +89,18 @@ public record BrokerConfig(
         }
         if (shutdownTimeoutMillis < 1) {
             throw new IllegalArgumentException("shutdownTimeoutMillis must be at least 1");
+        }
+        if (keyStore == null) {
+            throw new IllegalArgumentException("keyStore is required");
+        }
+        if (trustStore == null) {
+            throw new IllegalArgumentException("trustStore is required");
+        }
+        if (passwordFile == null) {
+            throw new IllegalArgumentException("passwordFile is required");
+        }
+        if (discoveryPort < 0 || discoveryPort > 65535) {
+            throw new IllegalArgumentException("discoveryPort must be between 0 and 65535");
         }
         List<String> unique = new ArrayList<>();
         for (String name : topics) {

@@ -47,6 +47,15 @@ class ProtocolVersionTest {
                 assertClosed(versionTwo);
             }
 
+            try (ProtocolClient versionThree = ProtocolClient.connect(harness.port())) {
+                versionThree.setReadTimeoutMillis(2_000);
+                versionThree.writeEncoded(FrameCodec.encode(new Frame(Command.HELLO, FrameCodec.helloHeader(3), new byte[0])));
+                Frame versionThreeError = versionThree.readFrame();
+                assertEquals(Command.ERROR, versionThreeError.command());
+                assertEquals("UNSUPPORTED_VERSION", FrameCodec.errorCode(versionThreeError.header()));
+                assertClosed(versionThree);
+            }
+
             producer.setReadTimeoutMillis(2_000);
             consumer.setReadTimeoutMillis(2_000);
             producer.hello();

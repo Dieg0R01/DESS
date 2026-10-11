@@ -45,6 +45,12 @@ public final class TestConfigs {
                 "INFO",
                 1_000,
                 2_000,
+                TestPki.brokerStore(),
+                TestPki.trustStore(),
+                TestPki.passwordFile(),
+                false,
+                55124,
+                false,
                 null);
     }
 
@@ -95,6 +101,12 @@ public final class TestConfigs {
                     "INFO",
                     1_000,
                     2_000,
+                    TestPki.brokerStore(),
+                    TestPki.trustStore(),
+                    TestPki.passwordFile(),
+                    false,
+                    55124,
+                    false,
                     null);
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);

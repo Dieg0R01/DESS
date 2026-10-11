@@ -67,6 +67,12 @@ final class ConfigLoader {
                 resolved.logLevel,
                 resolved.threadKeepAliveMillis,
                 resolved.shutdownTimeoutMillis,
+                resolved.keyStore,
+                resolved.trustStore,
+                resolved.passwordFile,
+                resolved.discoveryEnabled,
+                resolved.discoveryPort,
+                resolved.presenceEnabled,
                 file.toAbsolutePath());
         return new Result(config, List.of());
     }
@@ -89,6 +95,10 @@ final class ConfigLoader {
         reject(problems, file, resolved.shutdownTimeoutMillis < 1, "shutdownTimeoutMillis must be at least 1");
         reject(problems, file, resolved.logDirectoryText == null || resolved.logDirectoryText.isBlank(), "logDirectory is required");
         reject(problems, file, resolved.durability == null, "durability must be ALWAYS or INTERVAL");
+        reject(problems, file, resolved.keyStoreText == null || resolved.keyStoreText.isBlank(), "keyStore is required");
+        reject(problems, file, resolved.trustStoreText == null || resolved.trustStoreText.isBlank(), "trustStore is required");
+        reject(problems, file, resolved.passwordFileText == null || resolved.passwordFileText.isBlank(), "passwordFile is required");
+        reject(problems, file, resolved.discoveryPort < 0 || resolved.discoveryPort > 65535, "discoveryPort must be between 0 and 65535");
         Set<String> seen = new HashSet<>();
         for (String topic : resolved.topics) {
             if (!TopicName.isValid(topic)) {
@@ -116,11 +126,15 @@ final class ConfigLoader {
         ConfigDocument.Storage storage = document.storage;
         ConfigDocument.Topics topics = document.topics;
         ConfigDocument.Logging logging = document.logging;
+        ConfigDocument.Security security = document.security;
+        ConfigDocument.Discovery discovery = document.discovery;
         ConfigDocument.Network defaultNetwork = required(DEFAULTS.network, "network");
         ConfigDocument.Engine defaultEngine = required(DEFAULTS.engine, "engine");
         ConfigDocument.Storage defaultStorage = required(DEFAULTS.storage, "storage");
         ConfigDocument.Topics defaultTopics = required(DEFAULTS.topics, "topics");
         ConfigDocument.Logging defaultLogging = required(DEFAULTS.logging, "logging");
+        ConfigDocument.Security defaultSecurity = required(DEFAULTS.security, "security");
+        ConfigDocument.Discovery defaultDiscovery = required(DEFAULTS.discovery, "discovery");
         String logDirectoryText = storage == null ? null : storage.logDirectory;
         if (logDirectoryText == null) {
             logDirectoryText = requiredText(defaultStorage.logDirectory, "logDirectory");
@@ -139,6 +153,21 @@ final class ConfigLoader {
         List<String> names = topics != null
                 ? topics.topic == null ? List.of() : List.copyOf(topics.topic)
                 : defaultTopics.topic == null ? List.of() : List.copyOf(defaultTopics.topic);
+        String keyStoreText = security == null || security.keyStore == null
+                ? requiredText(defaultSecurity.keyStore, "keyStore")
+                : security.keyStore;
+        String trustStoreText = security == null || security.trustStore == null
+                ? requiredText(defaultSecurity.trustStore, "trustStore")
+                : security.trustStore;
+        String passwordFileText = security == null || security.passwordFile == null
+                ? requiredText(defaultSecurity.passwordFile, "passwordFile")
+                : security.passwordFile;
+        boolean discoveryEnabled = discovery != null && discovery.enabled != null
+                ? discovery.enabled
+                : required(defaultDiscovery.enabled, "enabled");
+        boolean presenceEnabled = discovery != null && discovery.presence != null
+                ? discovery.presence
+                : required(defaultDiscovery.presence, "presence");
         return new Resolved(
                 pick(network == null ? null : network.port, defaultNetwork.port, "port"),
                 pick(network == null ? null : network.maxConnections, defaultNetwork.maxConnections, "maxConnections"),
@@ -158,7 +187,16 @@ final class ConfigLoader {
                 absolute(logDirectoryText),
                 durability(durabilityText),
                 pick(storage == null ? null : storage.syncIntervalMs, defaultStorage.syncIntervalMs, "syncIntervalMs"),
-                level);
+                level,
+                keyStoreText,
+                absolute(keyStoreText),
+                trustStoreText,
+                absolute(trustStoreText),
+                passwordFileText,
+                absolute(passwordFileText),
+                discoveryEnabled,
+                pick(discovery == null ? null : discovery.port, defaultDiscovery.port, "port"),
+                presenceEnabled);
     }
 
     private static int pick(Integer value, Integer fallback, String setting) {
@@ -299,7 +337,16 @@ final class ConfigLoader {
             Path logDirectory,
             Durability durability,
             int syncIntervalMillis,
-            String logLevel) {
+            String logLevel,
+            String keyStoreText,
+            Path keyStore,
+            String trustStoreText,
+            Path trustStore,
+            String passwordFileText,
+            Path passwordFile,
+            boolean discoveryEnabled,
+            int discoveryPort,
+            boolean presenceEnabled) {
     }
 
     private static final class CollectingHandler implements ErrorHandler {

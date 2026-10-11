@@ -6,6 +6,7 @@ import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import dev.dess.common.protocol.StartPosition;
+import dev.dess.common.security.Digests;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -45,7 +46,7 @@ public final class ProtocolClient implements AutoCloseable {
         FrameCodec.write(output, new Frame(Command.HELLO, FrameCodec.helloHeader(FrameCodec.PROTOCOL_VERSION), new byte[0]));
         Frame reply = readFrame();
         if (reply.command() != Command.HELLO || FrameCodec.helloVersion(reply.header()) != FrameCodec.PROTOCOL_VERSION) {
-            throw new IOException("broker hello was not version 3");
+            throw new IOException("broker hello was not version 4");
         }
     }
 
@@ -54,7 +55,7 @@ public final class ProtocolClient implements AutoCloseable {
     }
 
     public void publish(String topic, byte[] payload, ConfirmationMode mode) throws IOException {
-        write(Command.PUBLISH, FrameCodec.publishHeader(topic, mode), payload);
+        write(Command.PUBLISH, FrameCodec.publishHeader(topic, mode, Digests.of(topic, payload == null ? new byte[0] : payload)), payload);
     }
 
     public void acknowledge(String topic, long offset) throws IOException {

@@ -132,6 +132,15 @@ final class ConfigWriter {
         builder.append("    <logging>\n");
         element(builder, "level", config.logLevel());
         builder.append("    </logging>\n");
+        builder.append("    <security>\n");
+        element(builder, "keyStore", config.keyStore().toAbsolutePath().toString());
+        element(builder, "trustStore", config.trustStore().toAbsolutePath().toString());
+        element(builder, "passwordFile", config.passwordFile().toAbsolutePath().toString());
+        builder.append("    </security>\n");
+        builder.append("    <discovery enabled=\"").append(config.discoveryEnabled())
+                .append("\" presence=\"").append(config.presenceEnabled()).append("\">\n");
+        element(builder, "port", config.discoveryPort());
+        builder.append("    </discovery>\n");
         builder.append("</broker>\n");
         return builder.toString();
     }

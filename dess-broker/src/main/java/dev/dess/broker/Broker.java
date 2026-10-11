@@ -150,6 +150,12 @@ public final class Broker implements AutoCloseable {
         effective.put("durability", config.durability().name());
         effective.put("syncIntervalMillis", Integer.toString(config.syncIntervalMillis()));
         effective.put("logLevel", config.logLevel());
+        effective.put("keyStore", config.keyStore().toAbsolutePath().toString());
+        effective.put("trustStore", config.trustStore().toAbsolutePath().toString());
+        effective.put("passwordFile", config.passwordFile().toAbsolutePath().toString());
+        effective.put("discoveryEnabled", Boolean.toString(config.discoveryEnabled()));
+        effective.put("discoveryPort", Integer.toString(config.discoveryPort()));
+        effective.put("presenceEnabled", Boolean.toString(config.presenceEnabled()));
         effective.put("topics", String.join(",", config.topics()));
         Logging.event("dev.dess.broker", "config.effective", effective);
     }

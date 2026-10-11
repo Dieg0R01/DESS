@@ -1,5 +1,6 @@
 package dev.dess.common.protocol;
 
+import dev.dess.common.security.Digests;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
@@ -19,7 +20,7 @@ public final class FrameCodec {
 
     public static final int MAX_FRAME_LENGTH = 16 * 1024 * 1024 + 1031;
 
-    public static final int PROTOCOL_VERSION = 3;
+    public static final int PROTOCOL_VERSION = 4;
 
     private static final int DISCARD_CHUNK = 8192;
 
@@ -227,37 +228,58 @@ public final class FrameCodec {
         return StartPosition.at(readLong(header, at));
     }
 
-    public static byte[] publishHeader(String topic, ConfirmationMode mode) {
+    public static byte[] publishHeader(String topic, ConfirmationMode mode, byte[] digest) {
         if (mode == null) {
             throw new FrameException(ErrorCode.MALFORMED_FRAME, "confirmation mode is required");
         }
+        byte[] digestBytes = requireDigest(digest);
         byte[] topicBytes = topicHeader(topic);
-        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + 1);
-        header[header.length - 1] = (byte) mode.wire();
+        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + 1 + Digests.LENGTH);
+        header[topicBytes.length] = (byte) mode.wire();
+        System.arraycopy(digestBytes, 0, header, topicBytes.length + 1, Digests.LENGTH);
         return header;
     }
 
     public static Publication publication(byte[] header) {
-        if (header == null || header.length < 3) {
+        if (header == null || header.length < 3 + Digests.LENGTH) {
             throw new FrameException(ErrorCode.MALFORMED_FRAME, "publish header is truncated");
         }
-        String topic = topic(Arrays.copyOf(header, header.length - 1));
-        return new Publication(topic, ConfirmationMode.fromWire(header[header.length - 1] & 0xff));
+        int prefixLength = header.length - Digests.LENGTH;
+        String topic = topic(Arrays.copyOf(header, prefixLength - 1));
+        ConfirmationMode mode = ConfirmationMode.fromWire(header[prefixLength - 1] & 0xff);
+        byte[] digest = Arrays.copyOfRange(header, prefixLength, header.length);
+        return new Publication(topic, mode, digest);
     }
 
-    public static byte[] deliverHeader(String topic, long offset) {
+    public static byte[] deliverHeader(String topic, long offset, byte[] digest) {
+        byte[] digestBytes = requireDigest(digest);
         byte[] topicBytes = topicHeader(topic);
-        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + 8);
+        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + 8 + Digests.LENGTH);
         putLong(header, topicBytes.length, offset);
+        System.arraycopy(digestBytes, 0, header, topicBytes.length + 8, Digests.LENGTH);
         return header;
     }
 
     public static Delivery delivery(byte[] header) {
-        if (header == null || header.length < 10) {
+        if (header == null || header.length < 10 + Digests.LENGTH) {
             throw new FrameException(ErrorCode.MALFORMED_FRAME, "deliver header is truncated");
         }
-        int topicLength = header.length - 8;
-        return new Delivery(topic(Arrays.copyOf(header, topicLength)), readLong(header, topicLength));
+        int prefixLength = header.length - Digests.LENGTH;
+        int topicLength = prefixLength - 8;
+        if (topicLength < 2) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "deliver header is truncated");
+        }
+        String topic = topic(Arrays.copyOf(header, topicLength));
+        long offset = readLong(header, topicLength);
+        byte[] digest = Arrays.copyOfRange(header, prefixLength, header.length);
+        return new Delivery(topic, offset, digest);
+    }
+
+    private static byte[] requireDigest(byte[] digest) {
+        if (digest == null || digest.length != Digests.LENGTH) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "digest must be 32 bytes");
+        }
+        return digest;
     }
 
     public static byte[] brokerAckHeader(String topic, long offset, ConfirmationMode mode, int acknowledgements) {
@@ -434,7 +456,7 @@ public final class FrameCodec {
 
     private static String topicOrNull(byte[] header) {
         try {
-            return topic(header);
+            return leadingTopic(header);
         } catch (FrameException ex) {
             return null;
         }

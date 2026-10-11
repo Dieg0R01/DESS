@@ -46,7 +46,10 @@ class ConfigLoadTest {
             "durability",
             "syncIntervalMs",
             "autoCreate",
-            "level");
+            "level",
+            "keyStore",
+            "trustStore",
+            "passwordFile");
 
     @Test
     void fiveIndependentProblemsExitOnceWithoutStarting() throws Exception {
@@ -151,6 +154,12 @@ class ConfigLoadTest {
             assertEquals(table.get("durability"), config.durability().name());
             assertEquals(Integer.parseInt(table.get("syncIntervalMs")), config.syncIntervalMillis());
             assertEquals(table.get("level"), config.logLevel());
+            assertEquals(Path.of(table.get("keyStore")).toAbsolutePath().normalize(), config.keyStore());
+            assertEquals(Path.of(table.get("trustStore")).toAbsolutePath().normalize(), config.trustStore());
+            assertEquals(Path.of(table.get("passwordFile")).toAbsolutePath().normalize(), config.passwordFile());
+            assertTrue(config.discoveryEnabled());
+            assertEquals(55124, config.discoveryPort());
+            assertFalse(config.presenceEnabled());
             assertEquals(file.toAbsolutePath(), config.configPath());
         } finally {
             delete(directory);
@@ -187,11 +196,17 @@ class ConfigLoadTest {
             assertTrue(text.contains("maxPayloadBytes=1048576"), text);
             assertTrue(text.contains("durability=ALWAYS"), text);
             assertTrue(text.contains("logLevel=INFO"), text);
+            assertTrue(text.contains("keyStore="), text);
+            assertTrue(text.contains("trustStore="), text);
+            assertTrue(text.contains("passwordFile="), text);
+            assertTrue(text.contains("discoveryEnabled=true"), text);
+            assertTrue(text.contains("discoveryPort=55124"), text);
+            assertTrue(text.contains("presenceEnabled=false"), text);
             assertTrue(text.contains("autoCreateTopics=true"), text);
             assertTrue(text.contains("syncIntervalMillis=1000"), text);
             assertTrue(text.contains("topics=sales"), text);
             assertTrue(text.contains("logDirectory=" + logs.toAbsolutePath()), text);
-            assertTrue(text.contains("version=3"), text);
+            assertTrue(text.contains("version=4"), text);
             assertTrue(text.contains("configPath=" + file.toAbsolutePath()), text);
             assertTrue(before(text, "event=config.effective", "event=broker.started"), text);
         } finally {

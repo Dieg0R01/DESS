@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.dess.common.security.Digests;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -52,15 +53,19 @@ class FrameCodecTest {
     void versionTwoHeadersRoundTripAndRejectABadShape() {
         long offset = Integer.MAX_VALUE + 1L;
 
-        byte[] publish = FrameCodec.publishHeader("sales", ConfirmationMode.ALL);
+        byte[] digest = Digests.of("sales", new byte[] {1});
+        byte[] publish = FrameCodec.publishHeader("sales", ConfirmationMode.ALL, digest);
         Publication publication = FrameCodec.publication(publish);
         assertEquals("sales", publication.topic());
         assertEquals(ConfirmationMode.ALL, publication.mode());
+        assertArrayEquals(digest, publication.digest());
 
-        byte[] deliver = FrameCodec.deliverHeader("stock", offset);
+        byte[] deliverDigest = Digests.of("stock", new byte[] {2});
+        byte[] deliver = FrameCodec.deliverHeader("stock", offset, deliverDigest);
         Delivery delivery = FrameCodec.delivery(deliver);
         assertEquals("stock", delivery.topic());
         assertEquals(offset, delivery.offset());
+        assertArrayEquals(deliverDigest, delivery.digest());
 
         byte[] ack = FrameCodec.brokerAckHeader("sales", offset, ConfirmationMode.ALL, 3);
         BrokerAck brokerAck = FrameCodec.brokerAck(ack);
@@ -91,14 +96,41 @@ class FrameCodecTest {
         assertEquals(ErrorCode.MALFORMED_FRAME, shortHeader.code());
 
         byte[] unknownMode = Arrays.copyOf(publish, publish.length);
-        unknownMode[unknownMode.length - 1] = 2;
+        unknownMode[unknownMode.length - 1 - Digests.LENGTH] = 2;
         FrameException badMode = assertThrows(FrameException.class, () -> FrameCodec.publication(unknownMode));
         assertEquals(ErrorCode.MALFORMED_FRAME, badMode.code());
     }
 
     @Test
+    void versionFourPublishAndDeliverRequireAThirtyTwoByteDigest() {
+        assertEquals(4, FrameCodec.PROTOCOL_VERSION);
+        byte[] digest = Digests.of("sales", "hello".getBytes(StandardCharsets.UTF_8));
+        byte[] publish = FrameCodec.publishHeader("sales", ConfirmationMode.BROKER, digest);
+        assertEquals(Digests.LENGTH, FrameCodec.publication(publish).digest().length);
+
+        byte[] missingPublish = Arrays.copyOf(publish, publish.length - Digests.LENGTH);
+        FrameException noDigest = assertThrows(FrameException.class, () -> FrameCodec.publication(missingPublish));
+        assertEquals(ErrorCode.MALFORMED_FRAME, noDigest.code());
+
+        byte[] extraPublish = Arrays.copyOf(publish, publish.length + 1);
+        FrameException trailingPublish = assertThrows(FrameException.class, () -> FrameCodec.publication(extraPublish));
+        assertEquals(ErrorCode.MALFORMED_FRAME, trailingPublish.code());
+
+        byte[] deliver = FrameCodec.deliverHeader("sales", 0, digest);
+        assertArrayEquals(digest, FrameCodec.delivery(deliver).digest());
+
+        byte[] missingDeliver = Arrays.copyOf(deliver, deliver.length - Digests.LENGTH);
+        FrameException noDeliverDigest = assertThrows(FrameException.class, () -> FrameCodec.delivery(missingDeliver));
+        assertEquals(ErrorCode.MALFORMED_FRAME, noDeliverDigest.code());
+
+        byte[] extraDeliver = Arrays.copyOf(deliver, deliver.length + 1);
+        FrameException trailingDeliver = assertThrows(FrameException.class, () -> FrameCodec.delivery(extraDeliver));
+        assertEquals(ErrorCode.MALFORMED_FRAME, trailingDeliver.code());
+    }
+
+    @Test
     void versionThreeSubscribeHeadersRoundTripAndRejectABadShape() {
-        assertEquals(3, FrameCodec.PROTOCOL_VERSION);
+        assertEquals(4, FrameCodec.PROTOCOL_VERSION);
         long offset = Integer.MAX_VALUE + 1L;
 
         byte[] latest = FrameCodec.subscribeHeader("sales", StartPosition.latest());
@@ -182,10 +214,10 @@ class FrameCodecTest {
     private static byte[] headerFor(Command command) {
         return switch (command) {
             case HELLO -> FrameCodec.helloHeader(FrameCodec.PROTOCOL_VERSION);
-            case PUBLISH -> FrameCodec.publishHeader("sales", ConfirmationMode.BROKER);
+            case PUBLISH -> FrameCodec.publishHeader("sales", ConfirmationMode.BROKER, Digests.of("sales", payloadFor(Command.PUBLISH)));
             case SUBSCRIBE -> FrameCodec.subscribeHeader("sales", StartPosition.latest());
             case UNSUBSCRIBE -> FrameCodec.topicHeader("sales");
-            case DELIVER -> FrameCodec.deliverHeader("sales", 0);
+            case DELIVER -> FrameCodec.deliverHeader("sales", 0, Digests.of("sales", payloadFor(Command.DELIVER)));
             case ACK -> FrameCodec.brokerAckHeader("sales", 0, ConfirmationMode.BROKER, 0);
             case PING, PONG -> new byte[0];
             case ERROR -> FrameCodec.errorHeader("MALFORMED_FRAME", "bad");

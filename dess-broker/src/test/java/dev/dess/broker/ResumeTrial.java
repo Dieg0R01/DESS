@@ -34,6 +34,12 @@ public final class ResumeTrial {
                 "INFO",
                 1_000,
                 5_000,
+                TestPki.brokerStore(),
+                TestPki.trustStore(),
+                TestPki.passwordFile(),
+                false,
+                55124,
+                false,
                 null));
     }
 }

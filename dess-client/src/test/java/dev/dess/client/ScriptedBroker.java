@@ -6,6 +6,7 @@ import dev.dess.common.protocol.ErrorCode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import dev.dess.common.protocol.StartPosition;
+import dev.dess.common.security.Digests;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -65,7 +66,7 @@ final class ScriptedBroker implements AutoCloseable {
     }
 
     void deliver(String topic, long offset, byte[] payload) throws IOException {
-        write(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset), payload));
+        write(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset, Digests.of(topic, payload)), payload));
         nextOffset = Math.max(nextOffset, offset + 1);
     }
 

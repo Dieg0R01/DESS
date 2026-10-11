@@ -27,4 +27,12 @@
     <logging>
         <level>INFO</level>
     </logging>
+    <security>
+        <keyStore>./config/pki/broker.p12</keyStore>
+        <trustStore>./config/pki/trust.p12</trustStore>
+        <passwordFile>./config/pki/password</passwordFile>
+    </security>
+    <discovery enabled="true" presence="false">
+        <port>55124</port>
+    </discovery>
 </broker>

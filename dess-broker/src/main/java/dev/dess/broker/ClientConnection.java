@@ -12,6 +12,7 @@ import dev.dess.common.protocol.Publication;
 import dev.dess.common.protocol.StartPosition;
 import dev.dess.common.protocol.SubscriptionRequest;
 import dev.dess.common.protocol.TopicName;
+import dev.dess.common.security.Digests;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -217,7 +218,7 @@ public final class ClientConnection implements Runnable {
         if (closing || state == State.CLOSING) {
             throw new IOException("connection is closing");
         }
-        writeFrame(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset), payload));
+        writeFrame(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset, Digests.of(topic, payload)), payload));
     }
 
     void cleanup() {

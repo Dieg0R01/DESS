@@ -307,6 +307,9 @@ A topic created while the broker is running, and a topic found only in a log fil
 | durability | ALWAYS |
 | syncIntervalMs | 1000 |
 | level | INFO |
+| keyStore | ./config/pki/broker.p12 |
+| trustStore | ./config/pki/trust.p12 |
+| passwordFile | ./config/pki/password |
 
 `config/config.xml` is a complete document:
 
@@ -340,6 +343,14 @@ A topic created while the broker is running, and a topic found only in a log fil
     <logging>
         <level>INFO</level>
     </logging>
+    <security>
+        <keyStore>./config/pki/broker.p12</keyStore>
+        <trustStore>./config/pki/trust.p12</trustStore>
+        <passwordFile>./config/pki/password</passwordFile>
+    </security>
+    <discovery enabled="true" presence="false">
+        <port>55124</port>
+    </discovery>
 </broker>
 ```
 
