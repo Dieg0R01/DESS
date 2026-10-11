@@ -8,7 +8,7 @@ DESS is a small event streaming platform inspired by the architecture of systems
 
 The goal is not to compete with production brokers, but to implement by hand — on top of the JDK — the building blocks that a distributed system relies on: networking over TCP and UDP, multithreading and synchronization, durable storage, XML configuration, TLS encryption, message integrity and a web management interface.
 
-> **Status:** protocol version 3 is implemented: a plain-TCP broker with `produce` and `consume`. Confirmed messages are in the topic logs. TLS, UDP discovery and the admin API remain the target architecture.
+> **Status:** protocol version 4 is implemented: a TLS 1.2+ broker with `produce` and `consume`. Confirmed messages are in the topic logs. The admin API remains the target architecture.
 
 ---
 
@@ -49,7 +49,7 @@ The goal is not to compete with production brokers, but to implement by hand —
 
 ## Architecture
 
-The system is made of three kinds of independent processes that communicate over the network, plus an administrative client. The diagram includes TLS, UDP discovery and the admin API, which remain target architecture. The running broker speaks plain TCP and writes each confirmed message to its topic log.
+The system is made of three kinds of independent processes that communicate over the network, plus an administrative client. The running broker speaks TLS 1.2 or later, answers UDP discovery, and writes each confirmed message to its topic log. The admin API remains the target architecture.
 
 ```mermaid
 flowchart LR
@@ -109,7 +109,7 @@ flowchart LR
 
 ### Broker internals
 
-- **Connection acceptor.** A `ServerSocket` (later `SSLServerSocket`) runs `accept()` in a loop and hands every new socket to an `ExecutorService`, so serving one client never blocks the others. `setSoTimeout()` is used to detect clients that disappear silently.
+- **Connection acceptor.** A `ServerSocket` runs `accept()` in a loop. Each accepted socket is classified and wrapped as an `SSLSocket` on a worker thread, so a slow handshake never blocks `accept()`. `setSoTimeout()` is used to detect clients that disappear silently.
 - **Topic registry.** A `ConcurrentHashMap<String, Topic>` holds the topic catalogue and each topic's set of active subscribers, allowing safe concurrent reads and writes.
 - **Per-topic queues.** Each topic owns a bounded `BlockingQueue`. Client handler threads `put()` incoming messages; a dedicated dispatcher thread per topic `take()`s them and delivers them to every subscriber, blocking naturally when the queue is empty.
 - **Flow control.** A `Semaphore` caps the number of in-flight, not-yet-delivered messages held in memory, applying back-pressure to producers when the broker is saturated.
@@ -141,13 +141,13 @@ sequenceDiagram
     B->>B: Register subscriber in topic registry
 
     P->>B: TLS connect (client certificate)
-    P->>P: Compute SHA-256 of payload
-    P->>B: PUBLISH sales, payload, hash
-    B->>B: Recompute hash and verify integrity
+    P->>P: Compute SHA-256 of topic and payload
+    P->>B: PUBLISH sales, payload, digest
+    B->>B: Recompute digest and verify integrity
     B->>D: Append message to binary log
     B->>B: put() into the "sales" queue
     B->>B: Dispatcher take()s the message
-    B-->>C: DELIVER sales, payload, hash
+    B-->>C: DELIVER sales, payload, digest
     C-->>B: ACK
 
     A->>B: GET /metrics
@@ -158,7 +158,7 @@ sequenceDiagram
 
 ## Wire protocol
 
-Protocol version 3 is a binary framing on plain TCP. Integers are big-endian and there is no padding. One frame is one record:
+Protocol version 4 is a binary framing inside TLS 1.2 or later. Integers are big-endian and there is no padding. One frame is one record:
 
 ```text
 uint32 frameLength
@@ -175,18 +175,22 @@ A topic is a `uint16` length followed by that many UTF-8 bytes. The name matches
 
 | Code | Command | Direction | Header | Payload |
 |------|---------|-----------|--------|---------|
-| 1 | `HELLO` | both | `uint16` version, only version 3 | empty |
-| 2 | `PUBLISH` | client → broker | topic, mode | message bytes |
+| 1 | `HELLO` | both | `uint16` version, only version 4 | empty |
+| 2 | `PUBLISH` | client → broker | topic, mode, 32-byte digest | message bytes |
 | 3 | `SUBSCRIBE` | client → broker | topic, start kind, and a `uint64` offset when the kind is `OFFSET` | empty |
 | 4 | `UNSUBSCRIBE` | client → broker | topic | empty |
-| 5 | `DELIVER` | broker → client | topic, offset | the same message bytes |
+| 5 | `DELIVER` | broker → client | topic, offset, 32-byte digest | the same message bytes |
 | 6 | `ACK` | broker → client | topic, offset, mode, acknowledgement count | empty |
 | 6 | `ACK` | client → broker | topic, offset | empty |
 | 7 | `PING` | client → broker | empty | empty |
 | 8 | `PONG` | broker → client | empty | empty |
 | 9 | `ERROR` | broker → client | error code and reason; `ACK_TIMEOUT` also carries topic, offset, expected count and received count | empty |
 
-The client's first frame is `HELLO` version 3. The broker answers with `HELLO` version 3. Any other first command is `HANDSHAKE_REQUIRED` and the connection closes. A `HELLO` for any version other than 3, versions 1 and 2 included, is `UNSUPPORTED_VERSION` and the connection closes. A second `HELLO` is `MALFORMED_FRAME`.
+The TLS handshake finishes before any frame is read. A client that never presents a certificate never reaches `HELLO`. The client's first frame is `HELLO` version 4. The broker answers with `HELLO` version 4. Any other first command is `HANDSHAKE_REQUIRED` and the connection closes. A `HELLO` for any version other than 4, versions 1, 2 and 3 included, is `UNSUPPORTED_VERSION` and the connection closes. A second `HELLO` is `MALFORMED_FRAME`.
+
+The `PUBLISH` digest is `SHA-256` of the topic's length prefix, the topic UTF-8 bytes and the payload. A header that omits those 32 bytes, or that has extra bytes after them, is `MALFORMED_FRAME` and the connection closes. After the topic name is valid and the peer has the producer role, the broker compares the digest with `MessageDigest.isEqual`. A mismatch is `INTEGRITY_FAILED`: the connection stays open and nothing is persisted or delivered. `DELIVER` carries the same 32 bytes that arrived on the matching `PUBLISH`, or, for a version-1 log record, the digest computed from that record's topic and payload. A consumer that sees a mismatch prints `INTEGRITY_FAILED` and does not acknowledge.
+
+A `PUBLISH` from a certificate without the producer role is `UNAUTHORIZED`. The connection stays open and nothing is persisted or delivered. A producer certificate may also subscribe.
 
 `SUBSCRIBE` carries a start kind after the topic. Kind `0` is `LATEST`: the cursor is the topic's next offset when the subscription is registered, and no retained message is delivered. Kind `1` is `EARLIEST`: the cursor is 0, so every retained message is delivered and then messages accepted later, as one offset sequence. Kind `2` is `OFFSET` and is followed by a `uint64` offset. That offset is valid from 0 through the next offset, inclusive. An offset equal to the next offset waits at the live tail and replays nothing. An offset past the next offset is `INVALID_OFFSET`: the connection stays open and no subscription is added. Any other kind, a missing offset, or extra header bytes are `MALFORMED_FRAME` and the connection closes. An unknown topic is resolved before the offset is checked.
 
@@ -202,7 +206,7 @@ The client sends `PING` and the broker answers `PONG`. A command byte outside 1�
 |------|------|------------|
 | `MALFORMED_FRAME` | Header of the wrong shape, empty client `ACK`, or unknown mode byte | Closed |
 | `UNKNOWN_COMMAND` | Command byte is not 1–9 | Open |
-| `UNSUPPORTED_VERSION` | `HELLO` version is not 3 | Closed |
+| `UNSUPPORTED_VERSION` | `HELLO` version is not 4 | Closed |
 | `HANDSHAKE_REQUIRED` | First frame is not `HELLO` | Closed |
 | `PAYLOAD_TOO_LARGE` | Payload exceeds the configured maximum. A frame past the 16 MiB ceiling is also rejected and closes the connection | Open when the payload was read and discarded |
 | `INVALID_TOPIC_NAME` | Topic text breaks the naming rule | Open |
@@ -213,12 +217,14 @@ The client sends `PING` and the broker answers `PONG`. A command byte outside 1�
 | `ACK_TIMEOUT` | An `ALL` publish was not fully acknowledged in time | Open |
 | `STORAGE_UNAVAILABLE` | The record could not be written, or the file could not be forced under `ALWAYS`. Nothing was confirmed and nothing was delivered | Open |
 | `INVALID_OFFSET` | `SUBSCRIBE` asked for an offset greater than the topic's next offset | Open |
+| `UNAUTHORIZED` | `PUBLISH` from a certificate without the producer role. Nothing is persisted or delivered | Open |
+| `INTEGRITY_FAILED` | The digest does not match topic and payload. Nothing is persisted or delivered | Open |
 
 When the broker-wide in-flight limit is reached, or a topic's queue is full, a publish waits up to the configured publish wait. If room appears, it is accepted. Otherwise the reply is `BROKER_BUSY` and the connection stays open. A message is in flight from acceptance until it has been written to every subscriber that was present then and is still connected. A subscriber whose outbound buffer stays full beyond the grace period receives `SLOW_CONSUMER` and the connection closes.
 
 With auto-creation enabled, the first valid `PUBLISH` or `SUBSCRIBE` on an unknown name creates the topic and writes the name into the configuration file before the command proceeds. With it disabled, both commands receive `UNKNOWN_TOPIC` and the connection stays open. A topic stays in its log and in the configuration file after the broker stops. Offsets on a topic keep increasing across restarts. Under `ALWAYS` the record is forced before any `DELIVER` and before the producer reply. Under `INTERVAL` the record is appended before either, and the force may lag by at most one `syncIntervalMs`.
 
-UDP discovery and TLS are part of the target architecture. They are not part of version 3.
+A client without `--host` finds the broker with a 15-byte UDP request (magic `DESS`, type 1, version 4, nonce) on the configured discovery port, 55124 by default. The broker replies with its TCP port and a flag that TLS is required. `--host` skips discovery. `--port` without `--host` is rejected.
 
 ---
 
@@ -238,7 +244,7 @@ dess/
 | Module | Main packages | Responsibility |
 |--------|---------------|----------------|
 | `dess-common` | `protocol`, `model`, `security` | Frame encoding/decoding, `Message` and `Topic` value types, SHA-256 hashing utilities. No networking and no threads. |
-| `dess-broker` | `net`, `engine`, `storage`, `config`, `discovery`, `admin` | TCP/TLS acceptor and client handlers; topic registry, queues and dispatchers; append-only log; JAXB configuration; UDP discovery responder; embedded REST API. |
+| `dess-broker` | `net`, `engine`, `storage`, `config`, `discovery`, `admin` | TCP/TLS acceptor and client handlers; topic registry, queues and dispatchers; append-only log; JAXB configuration; UDP discovery responder. The admin REST API remains target architecture. |
 | `dess-client` | `producer`, `consumer`, `discovery` | Reusable `Producer` and `Consumer` classes that handle discovery, connection, hashing and ACKs, plus runnable demo applications. |
 | `dess-admin` | `cli`, `http` | Admin tool built on `java.net.http.HttpClient` to call the REST API. |
 
@@ -310,6 +316,9 @@ A topic created while the broker is running, and a topic found only in a log fil
 | keyStore | ./config/pki/broker.p12 |
 | trustStore | ./config/pki/trust.p12 |
 | passwordFile | ./config/pki/password |
+| discoveryEnabled | true |
+| discoveryPort | 55124 |
+| presenceEnabled | false |
 
 `config/config.xml` is a complete document:
 
@@ -369,6 +378,14 @@ A topic created while the broker is running, and a topic found only in a log fil
 mvn clean verify
 ```
 
+### Generate development certificates
+
+```bash
+config/generate-certs.sh
+```
+
+The script writes `password`, `ca.p12`, `trust.p12`, `broker.p12`, `producer.p12` and `consumer.p12` under `config/pki`. A second run prints `kept` for each file and leaves the bytes unchanged. `--force` rewrites the six base files. `--client NAME --role producer|consumer` adds another identity signed by the same CA. The directory is listed in `.gitignore`.
+
 ### Run the broker
 
 ```bash
@@ -379,29 +396,27 @@ java -jar dess-broker/target/dess-broker.jar --config config/config.xml
 Usage: dess-broker [--config PATH]
 ```
 
-`--config` selects the document described above. The default path is `config.xml` in the working directory. `--help` and `-h` print the name, version and usage, then exit 0. An unknown flag, a missing value, or `--config` given twice prints the usage line to standard error and exits 2. A missing file, an invalid document, a log directory that cannot be created or is already in use, or a log damaged in the middle exits 1 and prints the problem without the usage line. The sample file declares `sales` and stores the topic logs in `./data/logs`.
+`--config` selects the document described above. The default path is `config.xml` in the working directory. `--help` and `-h` print the name, version and usage, then exit 0. An unknown flag, a missing value, or `--config` given twice prints the usage line to standard error and exits 2. A missing file, an invalid document, a missing or unusable key store, trust store or password file, a discovery port that cannot be bound, a log directory that cannot be created or is already in use, or a log damaged in the middle exits 1 and prints the problem without the usage line. The sample file declares `sales` and stores the topic logs in `./data/logs`.
 
 ### Run a consumer and a producer
 
 ```bash
 java -jar dess-client/target/dess-client.jar consume --topic sales --from earliest
 java -jar dess-client/target/dess-client.jar consume --topic sales --resume
-java -jar dess-client/target/dess-client.jar produce --topic sales --message hello
+java -jar dess-client/target/dess-client.jar produce --topic sales --message hello --identity config/pki/producer.p12
 ```
 
 ```text
-Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]
+Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--discovery-port N] [--presence-ms N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]
 ```
 
 `consume` may repeat `--topic`. `produce` takes one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. `--confirm` is accepted only by `produce` and applies to every publish: `BROKER` (the default) or `ALL`. Any other value exits 2. The consumer prints the topic, one space, the payload and a newline, then acknowledges that delivery with the topic and offset.
 
 `--from` is `consume` only. `latest` starts at the next offset, `earliest` replays from offset 0, and `OFFSET` is a decimal integer from 0 up. The default is `latest`. `--resume` is `consume` only: each topic starts at its stored offset plus one, or at `latest` when the offset file has no line for it. After printing a delivery the client rewrites that file, forcing a temporary sibling and moving it into place, and only then sends the acknowledgement. `--resume-file` defaults to `dess-offsets` in the working directory and, by itself, neither reads nor writes. `--resume` together with `--from` exits 2. `produce` rejects `--from`, `--resume` and `--resume-file` with exit 2. `consume` without `--from` and without `--resume` subscribes at `latest` and does not write an offset file.
 
-An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT`, `SLOW_CONSUMER`, `STORAGE_UNAVAILABLE` and `INVALID_OFFSET`, prints one line containing the code and exits 1. An `ACK_TIMEOUT` line also contains the expected and received counts. The broker leaves the connection open for `STORAGE_UNAVAILABLE` and `INVALID_OFFSET`. `--host` defaults to `127.0.0.1` and `--port` to `55123`.
+An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT`, `SLOW_CONSUMER`, `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED` and `INTEGRITY_FAILED`, prints one line containing the code and exits 1. An `ACK_TIMEOUT` line also contains the expected and received counts. The broker leaves the connection open for `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED` and `INTEGRITY_FAILED`. A `DELIVER` whose digest does not match prints `INTEGRITY_FAILED` with the topic and offset, does not print the payload, and exits 1.
 
-### Generate TLS certificates
-
-TLS is part of the target architecture and is not active in protocol version 3.
+Without `--host` the client discovers the broker on UDP port 55124. `--host` skips discovery and `--port` then defaults to 55123. `--port` without `--host` exits 2. `--identity` defaults to `./config/pki/producer.p12` for `produce` and `./config/pki/consumer.p12` for `consume`. `--trust-store` defaults to `./config/pki/trust.p12` and `--password-file` to `./config/pki/password`. A handshake failure prints one line naming `EXPIRED`, `UNTRUSTED`, `NOT_BROKER` or `PROTOCOL_VERSION` and exits 1. `--presence-ms N` announces the certificate `CN` every N milliseconds when the broker has presence enabled.
 
 ### Query the admin API
 
