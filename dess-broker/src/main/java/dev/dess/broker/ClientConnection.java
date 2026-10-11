@@ -298,8 +298,11 @@ public final class ClientConnection implements Runnable {
     }
 
     private void subscribe(Frame frame) throws IOException {
-        String topic = topic(frame);
-        if (topic == null) {
+        String topic;
+        try {
+            topic = FrameCodec.subscription(frame.header()).topic();
+        } catch (FrameException ex) {
+            fail(ErrorCode.MALFORMED_FRAME, "malformed topic");
             return;
         }
         if (!TopicName.isValid(topic)) {

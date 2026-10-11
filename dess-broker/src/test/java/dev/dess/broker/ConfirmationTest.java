@@ -321,7 +321,7 @@ class ConfirmationTest {
     }
 
     private static BrokerConfig config(int ackTimeoutMillis) {
-        return new BrokerConfig(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
+        return TestConfigs.full(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
                 BrokerConfig.DEFAULT_MAX_IN_FLIGHT, 1024, 256, 30_000, 1_000,
                 ackTimeoutMillis, true, List.of());
     }

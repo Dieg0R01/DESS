@@ -50,7 +50,6 @@ class FrameCodecTest {
 
     @Test
     void versionTwoHeadersRoundTripAndRejectABadShape() {
-        assertEquals(2, FrameCodec.PROTOCOL_VERSION);
         long offset = Integer.MAX_VALUE + 1L;
 
         byte[] publish = FrameCodec.publishHeader("sales", ConfirmationMode.ALL);
@@ -95,6 +94,41 @@ class FrameCodecTest {
         unknownMode[unknownMode.length - 1] = 2;
         FrameException badMode = assertThrows(FrameException.class, () -> FrameCodec.publication(unknownMode));
         assertEquals(ErrorCode.MALFORMED_FRAME, badMode.code());
+    }
+
+    @Test
+    void versionThreeSubscribeHeadersRoundTripAndRejectABadShape() {
+        assertEquals(3, FrameCodec.PROTOCOL_VERSION);
+        long offset = Integer.MAX_VALUE + 1L;
+
+        byte[] latest = FrameCodec.subscribeHeader("sales", StartPosition.latest());
+        SubscriptionRequest latestRequest = FrameCodec.subscription(latest);
+        assertEquals("sales", latestRequest.topic());
+        assertEquals(StartPosition.Kind.LATEST, latestRequest.position().kind());
+
+        byte[] earliest = FrameCodec.subscribeHeader("stock", StartPosition.earliest());
+        SubscriptionRequest earliestRequest = FrameCodec.subscription(earliest);
+        assertEquals("stock", earliestRequest.topic());
+        assertEquals(StartPosition.Kind.EARLIEST, earliestRequest.position().kind());
+
+        byte[] at = FrameCodec.subscribeHeader("sales", StartPosition.at(offset));
+        SubscriptionRequest atRequest = FrameCodec.subscription(at);
+        assertEquals("sales", atRequest.topic());
+        assertEquals(StartPosition.Kind.OFFSET, atRequest.position().kind());
+        assertEquals(offset, atRequest.position().offset());
+
+        byte[] trailing = Arrays.copyOf(latest, latest.length + 1);
+        FrameException extra = assertThrows(FrameException.class, () -> FrameCodec.subscription(trailing));
+        assertEquals(ErrorCode.MALFORMED_FRAME, extra.code());
+
+        byte[] shortOffset = Arrays.copyOf(at, at.length - 1);
+        FrameException truncated = assertThrows(FrameException.class, () -> FrameCodec.subscription(shortOffset));
+        assertEquals(ErrorCode.MALFORMED_FRAME, truncated.code());
+
+        byte[] unknownKind = Arrays.copyOf(latest, latest.length);
+        unknownKind[unknownKind.length - 1] = 3;
+        FrameException badKind = assertThrows(FrameException.class, () -> FrameCodec.subscription(unknownKind));
+        assertEquals(ErrorCode.MALFORMED_FRAME, badKind.code());
     }
 
     @Test
@@ -149,7 +183,8 @@ class FrameCodecTest {
         return switch (command) {
             case HELLO -> FrameCodec.helloHeader(FrameCodec.PROTOCOL_VERSION);
             case PUBLISH -> FrameCodec.publishHeader("sales", ConfirmationMode.BROKER);
-            case SUBSCRIBE, UNSUBSCRIBE -> FrameCodec.topicHeader("sales");
+            case SUBSCRIBE -> FrameCodec.subscribeHeader("sales", StartPosition.latest());
+            case UNSUBSCRIBE -> FrameCodec.topicHeader("sales");
             case DELIVER -> FrameCodec.deliverHeader("sales", 0);
             case ACK -> FrameCodec.brokerAckHeader("sales", 0, ConfirmationMode.BROKER, 0);
             case PING, PONG -> new byte[0];

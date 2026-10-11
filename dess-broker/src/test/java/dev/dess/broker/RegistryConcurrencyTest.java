@@ -157,7 +157,7 @@ class RegistryConcurrencyTest {
     }
 
     private static BrokerConfig config() {
-        return new BrokerConfig(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
+        return TestConfigs.full(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
                 BrokerConfig.DEFAULT_MAX_IN_FLIGHT, 1024, 1024, 120_000, 200,
                 BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS, true, List.of());
     }

@@ -175,6 +175,7 @@ final class ScriptedBroker implements AutoCloseable {
                 }
             }
             case SUBSCRIBE -> {
+                FrameCodec.subscription(frame.header());
                 String code = subscribeError;
                 if (code != null) {
                     write(new Frame(Command.ERROR, FrameCodec.errorHeader(code, "rejected"), new byte[0]));

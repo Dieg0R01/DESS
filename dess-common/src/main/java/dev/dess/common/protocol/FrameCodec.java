@@ -19,7 +19,7 @@ public final class FrameCodec {
 
     public static final int MAX_FRAME_LENGTH = 16 * 1024 * 1024 + 1031;
 
-    public static final int PROTOCOL_VERSION = 2;
+    public static final int PROTOCOL_VERSION = 3;
 
     private static final int DISCARD_CHUNK = 8192;
 
@@ -170,6 +170,61 @@ public final class FrameCodec {
 
     public static String errorReason(byte[] header) {
         return errorParts(header)[1];
+    }
+
+    public static byte[] subscribeHeader(String topic, StartPosition start) {
+        if (start == null) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "start position is required");
+        }
+        byte[] topicBytes = topicHeader(topic);
+        int extra = switch (start.kind()) {
+            case LATEST, EARLIEST -> 1;
+            case OFFSET -> 9;
+        };
+        byte[] header = Arrays.copyOf(topicBytes, topicBytes.length + extra);
+        header[topicBytes.length] = (byte) start.kind().wire();
+        if (start.kind() == StartPosition.Kind.OFFSET) {
+            putLong(header, topicBytes.length + 1, start.offset());
+        }
+        return header;
+    }
+
+    public static SubscriptionRequest subscription(byte[] header) {
+        if (header == null || header.length < 3) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "subscribe header is truncated");
+        }
+        int topicLength = ((header[0] & 0xff) << 8) | (header[1] & 0xff);
+        int topicEnd = 2 + topicLength;
+        if (topicEnd >= header.length) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "subscribe header is truncated");
+        }
+        String name = topic(Arrays.copyOf(header, topicEnd));
+        int kind = header[topicEnd] & 0xff;
+        int rest = header.length - topicEnd - 1;
+        StartPosition position = switch (kind) {
+            case 0 -> positionWithoutOffset(rest, StartPosition.latest());
+            case 1 -> positionWithoutOffset(rest, StartPosition.earliest());
+            case 2 -> offsetPosition(header, topicEnd + 1, rest);
+            default -> throw new FrameException(ErrorCode.MALFORMED_FRAME, "unknown start position");
+        };
+        return new SubscriptionRequest(name, position);
+    }
+
+    private static StartPosition positionWithoutOffset(int rest, StartPosition position) {
+        if (rest != 0) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "subscribe header has trailing bytes");
+        }
+        return position;
+    }
+
+    private static StartPosition offsetPosition(byte[] header, int at, int rest) {
+        if (rest < 8) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "subscribe offset is truncated");
+        }
+        if (rest != 8) {
+            throw new FrameException(ErrorCode.MALFORMED_FRAME, "subscribe header has trailing bytes");
+        }
+        return StartPosition.at(readLong(header, at));
     }
 
     public static byte[] publishHeader(String topic, ConfirmationMode mode) {

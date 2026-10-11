@@ -245,7 +245,14 @@ public final class BrokerMain {
                         publishWaitMillis == null ? BrokerConfig.DEFAULT_PUBLISH_WAIT_MILLIS : publishWaitMillis,
                         ackTimeoutMillis == null ? BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS : ackTimeoutMillis,
                         autoCreateTopics == null || autoCreateTopics,
-                        topics);
+                        topics,
+                        BrokerConfig.DEFAULT_LOG_DIRECTORY,
+                        Durability.ALWAYS,
+                        BrokerConfig.DEFAULT_SYNC_INTERVAL_MILLIS,
+                        BrokerConfig.DEFAULT_LOG_LEVEL,
+                        BrokerConfig.DEFAULT_THREAD_KEEP_ALIVE_MILLIS,
+                        BrokerConfig.DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
+                        null);
                 return new Request(config, logLevel == null ? "INFO" : logLevel);
             } catch (IllegalArgumentException ex) {
                 return null;

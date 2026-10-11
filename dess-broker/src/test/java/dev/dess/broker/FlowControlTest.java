@@ -222,7 +222,7 @@ class FlowControlTest {
     }
 
     private static BrokerConfig config(int maxInFlight, int queue, int outbound, int grace, int publishWait, int maxPayload) {
-        return new BrokerConfig(0, 32, maxPayload, 120_000,
+        return TestConfigs.full(0, 32, maxPayload, 120_000,
                 maxInFlight, queue, outbound, grace, publishWait,
                 BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS, true, List.of());
     }

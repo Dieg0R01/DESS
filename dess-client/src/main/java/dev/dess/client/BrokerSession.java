@@ -4,6 +4,7 @@ import dev.dess.common.protocol.Command;
 import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
+import dev.dess.common.protocol.StartPosition;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -59,7 +60,7 @@ public final class BrokerSession implements AutoCloseable {
     }
 
     public void subscribe(String topic) throws IOException {
-        write(new Frame(Command.SUBSCRIBE, FrameCodec.topicHeader(topic), new byte[0]));
+        write(new Frame(Command.SUBSCRIBE, FrameCodec.subscribeHeader(topic, StartPosition.latest()), new byte[0]));
     }
 
     public void unsubscribe(String topic) throws IOException {

@@ -84,7 +84,7 @@ class ConnectionIsolationTest {
     void connectionBeyondTheLimitReceivesBrokerBusyAndCloses() throws Exception {
         int limit = 3;
         List<ProtocolClient> open = new ArrayList<>();
-        try (BrokerHarness harness = BrokerHarness.start(new BrokerConfig(0, limit, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000))) {
+        try (BrokerHarness harness = BrokerHarness.start(TestConfigs.of(0, limit, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000))) {
             try {
                 for (int index = 0; index < limit; index++) {
                     ProtocolClient client = occupy(harness.port());

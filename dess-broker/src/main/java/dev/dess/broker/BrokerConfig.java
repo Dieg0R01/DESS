@@ -1,8 +1,10 @@
 package dev.dess.broker;
 
 import dev.dess.common.protocol.TopicName;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 public record BrokerConfig(
         int port,
@@ -16,7 +18,14 @@ public record BrokerConfig(
         int publishWaitMillis,
         int ackTimeoutMillis,
         boolean autoCreateTopics,
-        List<String> topics) {
+        List<String> topics,
+        Path logDirectory,
+        Durability durability,
+        int syncIntervalMillis,
+        String logLevel,
+        int threadKeepAliveMillis,
+        int shutdownTimeoutMillis,
+        Path configPath) {
 
     public static final int DEFAULT_PORT = 55123;
 
@@ -38,12 +47,17 @@ public record BrokerConfig(
 
     public static final int DEFAULT_ACK_TIMEOUT_MILLIS = 5000;
 
-    public BrokerConfig(int port, int maxConnections, int maxPayloadBytes, int idleTimeoutMillis) {
-        this(port, maxConnections, maxPayloadBytes, idleTimeoutMillis,
-                DEFAULT_MAX_IN_FLIGHT, DEFAULT_TOPIC_QUEUE_CAPACITY, DEFAULT_OUTBOUND_CAPACITY,
-                DEFAULT_SLOW_CONSUMER_GRACE_MILLIS, DEFAULT_PUBLISH_WAIT_MILLIS, DEFAULT_ACK_TIMEOUT_MILLIS,
-                true, List.of());
-    }
+    public static final Path DEFAULT_LOG_DIRECTORY = Path.of("data", "logs");
+
+    public static final int DEFAULT_SYNC_INTERVAL_MILLIS = 1000;
+
+    public static final String DEFAULT_LOG_LEVEL = "INFO";
+
+    public static final int DEFAULT_THREAD_KEEP_ALIVE_MILLIS = 1000;
+
+    public static final int DEFAULT_SHUTDOWN_TIMEOUT_MILLIS = 2000;
+
+    private static final Set<String> LOG_LEVELS = Set.of("SEVERE", "WARNING", "INFO", "FINE");
 
     public BrokerConfig {
         if (port < 0 || port > 65535) {
@@ -82,6 +96,24 @@ public record BrokerConfig(
         if (topics == null) {
             throw new IllegalArgumentException("topics are required");
         }
+        if (logDirectory == null) {
+            throw new IllegalArgumentException("logDirectory is required");
+        }
+        if (durability == null) {
+            throw new IllegalArgumentException("durability is required");
+        }
+        if (syncIntervalMillis < 1) {
+            throw new IllegalArgumentException("syncIntervalMillis must be at least 1");
+        }
+        if (!LOG_LEVELS.contains(logLevel)) {
+            throw new IllegalArgumentException("logLevel must be SEVERE, WARNING, INFO or FINE");
+        }
+        if (threadKeepAliveMillis < 1) {
+            throw new IllegalArgumentException("threadKeepAliveMillis must be at least 1");
+        }
+        if (shutdownTimeoutMillis < 1) {
+            throw new IllegalArgumentException("shutdownTimeoutMillis must be at least 1");
+        }
         List<String> unique = new ArrayList<>();
         for (String name : topics) {
             if (!TopicName.isValid(name)) {
@@ -95,6 +127,25 @@ public record BrokerConfig(
     }
 
     public static BrokerConfig defaults() {
-        return new BrokerConfig(DEFAULT_PORT, DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_IDLE_TIMEOUT_MILLIS);
+        return new BrokerConfig(
+                DEFAULT_PORT,
+                DEFAULT_MAX_CONNECTIONS,
+                DEFAULT_MAX_PAYLOAD_BYTES,
+                DEFAULT_IDLE_TIMEOUT_MILLIS,
+                DEFAULT_MAX_IN_FLIGHT,
+                DEFAULT_TOPIC_QUEUE_CAPACITY,
+                DEFAULT_OUTBOUND_CAPACITY,
+                DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
+                DEFAULT_PUBLISH_WAIT_MILLIS,
+                DEFAULT_ACK_TIMEOUT_MILLIS,
+                true,
+                List.of(),
+                DEFAULT_LOG_DIRECTORY,
+                Durability.ALWAYS,
+                DEFAULT_SYNC_INTERVAL_MILLIS,
+                DEFAULT_LOG_LEVEL,
+                DEFAULT_THREAD_KEEP_ALIVE_MILLIS,
+                DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
+                null);
     }
 }

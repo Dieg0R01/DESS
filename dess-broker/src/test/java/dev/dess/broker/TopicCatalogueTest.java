@@ -150,7 +150,7 @@ class TopicCatalogueTest {
     }
 
     private static BrokerConfig configured() {
-        return new BrokerConfig(0, 16, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
+        return TestConfigs.full(0, 16, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
                 BrokerConfig.DEFAULT_MAX_IN_FLIGHT, 1024, 256, 30_000, 1_000,
                 BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS, false, List.of("sales"));
     }

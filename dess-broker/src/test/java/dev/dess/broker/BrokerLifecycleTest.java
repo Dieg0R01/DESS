@@ -32,13 +32,13 @@ class BrokerLifecycleTest {
     @Test
     void startOnAFreePortAcceptsAndLogsStarted() throws Exception {
         try (LogCapture logs = LogCapture.open();
-                Broker broker = Broker.start(new BrokerConfig(0, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000))) {
+                Broker broker = Broker.start(TestConfigs.of(0, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000))) {
             long started = System.nanoTime();
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 2_000);
             }
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofSeconds(2)) < 0);
-            assertEquals(1, logs.count("event=broker.started", "version=2", "tcpPort=" + broker.port()));
+            assertEquals(1, logs.count("event=broker.started", "version=3", "tcpPort=" + broker.port()));
         }
     }
 
@@ -47,7 +47,7 @@ class BrokerLifecycleTest {
         try (LogCapture logs = LogCapture.open();
                 ServerSocket taken = new ServerSocket(0)) {
             int port = taken.getLocalPort();
-            IOException failure = assertThrows(IOException.class, () -> Broker.start(new BrokerConfig(
+            IOException failure = assertThrows(IOException.class, () -> Broker.start(TestConfigs.of(
                     port, 8, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 30_000)));
             assertTrue(failure.getMessage() != null && failure.getMessage().contains(Integer.toString(port)), failure.getMessage());
             assertEquals(0, logs.count("event=broker.started"));
@@ -58,7 +58,7 @@ class BrokerLifecycleTest {
     void closeWithTwentyClientsStopsWithinFiveSeconds() throws Exception {
         List<ProtocolClient> clients = new ArrayList<>();
         LogCapture logs = LogCapture.open();
-        Broker broker = Broker.start(new BrokerConfig(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
+        Broker broker = Broker.start(TestConfigs.of(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000));
         try {
             for (int index = 0; index < 20; index++) {
                 ProtocolClient client = ProtocolClient.connect(broker.port());

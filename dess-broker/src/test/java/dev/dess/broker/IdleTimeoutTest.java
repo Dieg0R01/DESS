@@ -26,7 +26,7 @@ class IdleTimeoutTest {
     void pingKeepsTheClientAndSilenceRemovesTheSubscription() throws Exception {
         int timeout = 400;
         try (LogCapture logs = LogCapture.open();
-                BrokerHarness harness = BrokerHarness.start(new BrokerConfig(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, timeout));
+                BrokerHarness harness = BrokerHarness.start(TestConfigs.of(0, 128, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, timeout));
                 ProtocolClient publisher = ProtocolClient.connect(harness.port());
                 ProtocolClient watcher = ProtocolClient.connect(harness.port());
                 ProtocolClient silent = ProtocolClient.connect(harness.port())) {

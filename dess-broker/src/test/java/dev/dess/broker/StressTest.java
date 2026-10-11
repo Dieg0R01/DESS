@@ -243,7 +243,7 @@ class StressTest {
     }
 
     private static BrokerConfig config() {
-        return new BrokerConfig(0, 64, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
+        return TestConfigs.full(0, 64, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
                 100_000, 8_192, 8_192, 120_000, 30_000,
                 BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS, true, List.of());
     }

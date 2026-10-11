@@ -55,8 +55,8 @@ public final class Broker implements AutoCloseable {
         this.permits = new Semaphore(config.maxConnections());
         this.serverSocket = bind(config.port());
         this.startedAt = System.nanoTime();
-        this.readers = newPool(config.maxConnections());
-        this.writers = newPool(config.maxConnections());
+        this.readers = newPool(config.maxConnections(), config.threadKeepAliveMillis());
+        this.writers = newPool(config.maxConnections(), config.threadKeepAliveMillis());
         this.acceptThread = new Thread(this::acceptLoop, "dess-accept-" + serverSocket.getLocalPort());
         this.acceptThread.setDaemon(false);
         Map<String, String> started = new LinkedHashMap<>();
@@ -215,9 +215,10 @@ public final class Broker implements AutoCloseable {
         writers.shutdownNow();
         flowTimer.shutdownNow();
         try {
-            if (!readers.awaitTermination(2, TimeUnit.SECONDS)
-                    || !writers.awaitTermination(2, TimeUnit.SECONDS)
-                    || !flowTimer.awaitTermination(2, TimeUnit.SECONDS)) {
+            long shutdownMillis = config.shutdownTimeoutMillis();
+            if (!readers.awaitTermination(shutdownMillis, TimeUnit.MILLISECONDS)
+                    || !writers.awaitTermination(shutdownMillis, TimeUnit.MILLISECONDS)
+                    || !flowTimer.awaitTermination(shutdownMillis, TimeUnit.MILLISECONDS)) {
                 throw new IllegalStateException("Connection threads did not stop");
             }
         } catch (InterruptedException ex) {
@@ -275,12 +276,12 @@ public final class Broker implements AutoCloseable {
         }
     }
 
-    private static ExecutorService newPool(int threads) {
+    private static ExecutorService newPool(int threads, int keepAliveMillis) {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(
                 threads,
                 threads,
-                1,
-                TimeUnit.SECONDS,
+                keepAliveMillis,
+                TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<>(),
                 runnable -> {
                     Thread thread = new Thread(runnable);

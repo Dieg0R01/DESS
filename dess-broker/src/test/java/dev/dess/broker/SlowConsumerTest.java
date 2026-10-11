@@ -276,7 +276,7 @@ class SlowConsumerTest {
     }
 
     private static BrokerConfig config(int outbound, int queue, int grace) {
-        return new BrokerConfig(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
+        return TestConfigs.full(0, 32, BrokerConfig.DEFAULT_MAX_PAYLOAD_BYTES, 120_000,
                 BrokerConfig.DEFAULT_MAX_IN_FLIGHT, queue, outbound, grace,
                 BrokerConfig.DEFAULT_PUBLISH_WAIT_MILLIS, BrokerConfig.DEFAULT_ACK_TIMEOUT_MILLIS,
                 true, List.of());

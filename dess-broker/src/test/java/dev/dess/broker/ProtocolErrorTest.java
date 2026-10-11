@@ -100,7 +100,7 @@ class ProtocolErrorTest {
 
     @Test
     void oversizePayloadStaysOpenAndOversizeFrameCloses() throws Exception {
-        try (BrokerHarness harness = BrokerHarness.start(new BrokerConfig(0, 128, 4, 120_000));
+        try (BrokerHarness harness = BrokerHarness.start(TestConfigs.of(0, 128, 4, 120_000));
                 ProtocolClient client = ProtocolClient.connect(harness.port())) {
             arm(client);
             client.hello();
