@@ -34,18 +34,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ClientConnection implements Runnable {
 
     private enum State {
+        TLS_HANDSHAKE,
         HANDSHAKING,
         ACTIVE,
         CLOSING
     }
 
     private final long id;
-    private final Socket socket;
-    private final InputStream input;
-    private final OutputStream output;
+    private final Socket raw;
+    private Socket socket;
+    private InputStream input;
+    private OutputStream output;
     private final BrokerConfig config;
     private final TopicRegistry registry;
     private final Broker broker;
+    private final TlsMaterial tls;
     private final Semaphore permits;
     private final String remoteAddress;
     private final Instant acceptedAt;
@@ -58,7 +61,7 @@ public final class ClientConnection implements Runnable {
 
     private final ConnectionWriter writer = new ConnectionWriter(this);
 
-    private volatile State state = State.HANDSHAKING;
+    private volatile State state = State.TLS_HANDSHAKE;
 
     private volatile boolean closing;
 
@@ -74,14 +77,18 @@ public final class ClientConnection implements Runnable {
 
     private boolean cleaned;
 
-    ClientConnection(long id, Socket socket, BrokerConfig config, TopicRegistry registry, Broker broker, Semaphore permits) throws IOException {
+    private boolean handshakeFailed;
+
+    private boolean tlsCompleted;
+
+    ClientConnection(long id, Socket socket, BrokerConfig config, TopicRegistry registry, Broker broker, Semaphore permits, TlsMaterial tls) throws IOException {
         this.id = id;
+        this.raw = socket;
         this.socket = socket;
-        this.input = socket.getInputStream();
-        this.output = socket.getOutputStream();
         this.config = config;
         this.registry = registry;
         this.broker = broker;
+        this.tls = tls;
         this.permits = permits;
         this.remoteAddress = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
         this.acceptedAt = Instant.now();
@@ -181,6 +188,9 @@ public final class ClientConnection implements Runnable {
     public void run() {
         Thread.currentThread().setName("dess-client-" + id);
         try {
+            if (!completeTls()) {
+                return;
+            }
             socket.setSoTimeout(config.idleTimeoutMillis());
             while (state != State.CLOSING) {
                 try {
@@ -245,11 +255,38 @@ public final class ClientConnection implements Runnable {
         }
         closeSocket();
         broker.forget(this);
+        if (handshakeFailed || !tlsCompleted) {
+            return;
+        }
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("clientId", Long.toString(id));
         properties.put("reason", broker.isShuttingDown() ? "SHUTDOWN" : closeReason);
         properties.put("durationMs", Long.toString(Duration.between(acceptedAt, Instant.now()).toMillis()));
         Logging.event("dev.dess.broker", "client.disconnected", properties);
+    }
+
+    private boolean completeTls() {
+        TlsHandshake.Outcome outcome = TlsHandshake.open(socket, tls, config.idleTimeoutMillis());
+        if (outcome.failed()) {
+            handshakeFailed = true;
+            Broker.logHandshakeFailed(remoteAddress, outcome.reason(), outcome.detail());
+            if (outcome.socket() != null) {
+                socket = outcome.socket();
+            }
+            return false;
+        }
+        socket = outcome.socket();
+        try {
+            input = socket.getInputStream();
+            output = socket.getOutputStream();
+        } catch (IOException ex) {
+            handshakeFailed = true;
+            Broker.logHandshakeFailed(remoteAddress, HandshakeReason.FAILED, ex.getMessage());
+            return false;
+        }
+        tlsCompleted = true;
+        state = State.HANDSHAKING;
+        return true;
     }
 
     private void handle(Frame frame) throws IOException {
@@ -534,18 +571,9 @@ public final class ClientConnection implements Runnable {
     }
 
     private void closeSocket() {
-        if (socket.isClosed()) {
-            return;
-        }
-        try {
-            socket.shutdownOutput();
-        } catch (IOException ex) {
-            // The peer may already be gone.
-        }
-        try {
-            socket.close();
-        } catch (IOException ex) {
-            // Closing a failed socket still completes cleanup.
+        Broker.closeQuietly(raw);
+        if (socket != raw) {
+            Broker.closeQuietly(socket);
         }
     }
 

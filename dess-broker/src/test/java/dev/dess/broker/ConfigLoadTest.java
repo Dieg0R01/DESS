@@ -183,8 +183,9 @@ class ConfigLoadTest {
                     <topics>
                         <topic>sales</topic>
                     </topics>
+                    %s
                 </broker>
-                """.formatted(logs.toAbsolutePath()));
+                """.formatted(logs.toAbsolutePath(), TestConfigs.securityXml()));
         Process process = start(directory, "--config", file.toString());
         Stdout stdout = new Stdout(process);
         try {
@@ -202,6 +203,7 @@ class ConfigLoadTest {
             assertTrue(text.contains("discoveryEnabled=true"), text);
             assertTrue(text.contains("discoveryPort=55124"), text);
             assertTrue(text.contains("presenceEnabled=false"), text);
+            assertTrue(text.contains("tls=true"), text);
             assertTrue(text.contains("autoCreateTopics=true"), text);
             assertTrue(text.contains("syncIntervalMillis=1000"), text);
             assertTrue(text.contains("topics=sales"), text);
@@ -227,8 +229,9 @@ class ConfigLoadTest {
                 <broker>
                     <network><port>0</port></network>
                     <storage><logDirectory>%s</logDirectory></storage>
+                    %s
                 </broker>
-                """.formatted(logs.toAbsolutePath()));
+                """.formatted(logs.toAbsolutePath(), TestConfigs.securityXml()));
         try {
             Result result = run(directory, "--config", file.toString());
             assertEquals(1, result.exitCode(), result.stderr());

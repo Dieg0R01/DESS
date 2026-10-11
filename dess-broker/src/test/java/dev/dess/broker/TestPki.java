@@ -1,19 +1,39 @@
 package dev.dess.broker;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.Principal;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedKeyManager;
 
 public final class TestPki {
 
     private static final ReentrantLock LOCK = new ReentrantLock();
 
     private static Path directory;
+
+    private static Path untrustedDirectory;
 
     private TestPki() {
     }
@@ -70,10 +90,114 @@ public final class TestPki {
     }
 
     public static Path untrustedClient() {
-        ensure();
-        Path other = moduleRoot().resolve("target").resolve("test-pki-untrusted");
-        runScript(other);
-        return other.resolve("producer.p12");
+        return untrustedDirectory().resolve("producer.p12");
+    }
+
+    public static Path untrustedTrustStore() {
+        return untrustedDirectory().resolve("trust.p12");
+    }
+
+    public static Path untrustedPasswordFile() {
+        return untrustedDirectory().resolve("password");
+    }
+
+    public static char[] password() {
+        try {
+            return TlsMaterial.firstLine(passwordFile()).toCharArray();
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    public static SSLContext clientContext(Path identity, Path trust, Path passwordFile) {
+        try {
+            char[] secret = TlsMaterial.firstLine(passwordFile).toCharArray();
+            KeyStore keys = store(identity, secret);
+            KeyStore trusted = store(trust, secret);
+            KeyManagerFactory keysFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            keysFactory.init(keys, secret);
+            TrustManagerFactory trustFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            trustFactory.init(trusted);
+            SSLContext context = SSLContext.getInstance("TLS");
+            context.init(new KeyManager[] {presentEvenIfExpired(keysFactory.getKeyManagers(), keys, secret)},
+                    trustFactory.getTrustManagers(), null);
+            return context;
+        } catch (IOException | GeneralSecurityException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    public static SSLSocket clientSocket(int port) throws IOException {
+        return clientSocket(port, producerStore(), trustStore(), passwordFile());
+    }
+
+    public static SSLSocket clientSocket(int port, Path identity, Path trust, Path passwordFile) throws IOException {
+        SSLContext context = clientContext(identity, trust, passwordFile);
+        SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket();
+        socket.setTcpNoDelay(true);
+        socket.setEnabledProtocols(TlsMaterial.PROTOCOLS);
+        SSLParameters parameters = socket.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm(null);
+        socket.setSSLParameters(parameters);
+        socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 2_000);
+        return socket;
+    }
+
+    private static Path untrustedDirectory() {
+        if (untrustedDirectory != null) {
+            return untrustedDirectory;
+        }
+        LOCK.lock();
+        try {
+            if (untrustedDirectory != null) {
+                return untrustedDirectory;
+            }
+            Path other = moduleRoot().resolve("target").resolve("test-pki-untrusted");
+            runScript(other);
+            untrustedDirectory = other;
+            return untrustedDirectory;
+        } finally {
+            LOCK.unlock();
+        }
+    }
+
+    private static X509ExtendedKeyManager presentEvenIfExpired(KeyManager[] managers, KeyStore keys, char[] secret)
+            throws GeneralSecurityException {
+        X509ExtendedKeyManager delegate = null;
+        for (KeyManager manager : managers) {
+            if (manager instanceof X509ExtendedKeyManager extended) {
+                delegate = extended;
+                break;
+            }
+        }
+        if (delegate == null) {
+            throw new IllegalStateException("X509 key manager is required");
+        }
+        String alias = null;
+        for (String candidate : Collections.list(keys.aliases())) {
+            if (keys.isKeyEntry(candidate)) {
+                alias = candidate;
+                break;
+            }
+        }
+        if (alias == null) {
+            throw new IllegalStateException("identity store has no private key");
+        }
+        PrivateKey key = (PrivateKey) keys.getKey(alias, secret);
+        java.security.cert.Certificate[] chain = keys.getCertificateChain(alias);
+        X509Certificate[] x509 = new X509Certificate[chain.length];
+        for (int index = 0; index < chain.length; index++) {
+            x509[index] = (X509Certificate) chain[index];
+        }
+        return new ForcedClientKey(delegate, alias, key, x509);
+    }
+
+    private static KeyStore store(Path path, char[] secret) throws IOException, GeneralSecurityException {
+        try (InputStream input = Files.newInputStream(path)) {
+            KeyStore store = KeyStore.getInstance("PKCS12");
+            store.load(input, secret);
+            return store;
+        }
     }
 
     private static void ensure() {
@@ -85,7 +209,7 @@ public final class TestPki {
             if (directory != null) {
                 return;
             }
-            Path out = moduleRoot().resolve("target").resolve("test-pki");
+            Path out = repositoryRoot().resolve("target").resolve("test-pki");
             runScript(out);
             directory = out;
         } finally {
@@ -181,5 +305,55 @@ public final class TestPki {
             dir = dir.getParent();
         }
         throw new IllegalStateException("Could not find config/generate-certs.sh from " + Path.of("").toAbsolutePath());
+    }
+
+    private static final class ForcedClientKey extends X509ExtendedKeyManager {
+
+        private final X509ExtendedKeyManager delegate;
+        private final String alias;
+        private final PrivateKey key;
+        private final X509Certificate[] chain;
+
+        private ForcedClientKey(X509ExtendedKeyManager delegate, String alias, PrivateKey key, X509Certificate[] chain) {
+            this.delegate = delegate;
+            this.alias = alias;
+            this.key = key;
+            this.chain = chain;
+        }
+
+        @Override
+        public String[] getClientAliases(String keyType, Principal[] issuers) {
+            return new String[] {alias};
+        }
+
+        @Override
+        public String chooseClientAlias(String[] keyType, Principal[] issuers, Socket socket) {
+            return alias;
+        }
+
+        @Override
+        public String chooseEngineClientAlias(String[] keyType, Principal[] issuers, SSLEngine engine) {
+            return alias;
+        }
+
+        @Override
+        public String[] getServerAliases(String keyType, Principal[] issuers) {
+            return delegate.getServerAliases(keyType, issuers);
+        }
+
+        @Override
+        public String chooseServerAlias(String keyType, Principal[] issuers, Socket socket) {
+            return delegate.chooseServerAlias(keyType, issuers, socket);
+        }
+
+        @Override
+        public X509Certificate[] getCertificateChain(String chosen) {
+            return alias.equals(chosen) ? chain : null;
+        }
+
+        @Override
+        public PrivateKey getPrivateKey(String chosen) {
+            return alias.equals(chosen) ? key : null;
+        }
     }
 }

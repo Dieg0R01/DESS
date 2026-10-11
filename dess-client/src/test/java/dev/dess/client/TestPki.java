@@ -1,13 +1,21 @@
 package dev.dess.client;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManagerFactory;
 
 public final class TestPki {
 
@@ -41,6 +49,52 @@ public final class TestPki {
 
     public static Path consumerStore() {
         return directory().resolve("consumer.p12");
+    }
+
+    public static SSLSocket serverSocket(Socket accepted) throws IOException {
+        try {
+            SSLContext context = serverContext();
+            SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket(
+                    accepted, accepted.getInetAddress().getHostAddress(), accepted.getPort(), true);
+            socket.setUseClientMode(false);
+            socket.setEnabledProtocols(ClientTls.PROTOCOLS);
+            return socket;
+        } catch (GeneralSecurityException ex) {
+            throw new IOException(ex);
+        }
+    }
+
+    private static SSLContext serverContext() throws IOException, GeneralSecurityException {
+        char[] secret = firstLine(passwordFile()).toCharArray();
+        KeyStore keys = store(brokerStore(), secret);
+        KeyStore trust = store(trustStore(), secret);
+        KeyManagerFactory keysFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        keysFactory.init(keys, secret);
+        TrustManagerFactory trustFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        trustFactory.init(trust);
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(keysFactory.getKeyManagers(), trustFactory.getTrustManagers(), null);
+        return context;
+    }
+
+    private static KeyStore store(Path path, char[] secret) throws IOException, GeneralSecurityException {
+        try (InputStream input = Files.newInputStream(path)) {
+            KeyStore store = KeyStore.getInstance("PKCS12");
+            store.load(input, secret);
+            return store;
+        }
+    }
+
+    private static String firstLine(Path file) throws IOException {
+        String text = Files.readString(file);
+        int end = text.indexOf('\n');
+        if (end >= 0) {
+            text = text.substring(0, end);
+        }
+        if (text.endsWith("\r")) {
+            text = text.substring(0, text.length() - 1);
+        }
+        return text;
     }
 
     public static Path client(String name, String role) {
@@ -85,7 +139,7 @@ public final class TestPki {
             if (directory != null) {
                 return;
             }
-            Path out = moduleRoot().resolve("target").resolve("test-pki");
+            Path out = repositoryRoot().resolve("target").resolve("test-pki");
             runScript(out);
             directory = out;
         } finally {

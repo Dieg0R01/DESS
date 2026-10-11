@@ -10,9 +10,8 @@ import dev.dess.common.security.Digests;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.net.Socket;
+import javax.net.ssl.SSLSocket;
 
 public final class ProtocolClient implements AutoCloseable {
 
@@ -27,9 +26,8 @@ public final class ProtocolClient implements AutoCloseable {
     }
 
     public static ProtocolClient connect(int port) throws IOException {
-        Socket socket = new Socket();
-        socket.setTcpNoDelay(true);
-        socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 2000);
+        SSLSocket socket = TestPki.clientSocket(port);
+        socket.startHandshake();
         return new ProtocolClient(socket);
     }
 
@@ -105,6 +103,11 @@ public final class ProtocolClient implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
+        try {
+            socket.setSoTimeout(1);
+        } catch (IOException ex) {
+            // Closing still proceeds.
+        }
         socket.close();
     }
 

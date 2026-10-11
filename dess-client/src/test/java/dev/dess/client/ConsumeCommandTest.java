@@ -203,7 +203,8 @@ class ConsumeCommandTest {
         BrokerSession publisher = null;
         try {
             int port = portFrom(brokerOut.await("tcpPort=", Duration.ofSeconds(10)));
-            publisher = BrokerSession.connect("127.0.0.1", port, 30_000);
+            publisher = BrokerSession.connect("127.0.0.1", port, 30_000,
+                    ClientTls.context(TestPki.producerStore(), TestPki.trustStore(), TestPki.passwordFile()));
             int batch = 1_000;
             for (int restart = 0; restart < 10; restart++) {
                 Path output = directory.resolve("out-" + restart + ".txt");

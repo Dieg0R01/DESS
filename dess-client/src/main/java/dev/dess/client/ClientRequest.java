@@ -19,8 +19,11 @@ final class ClientRequest {
     private final StartPosition from;
     private final boolean resume;
     private final Path resumeFile;
+    private final Path identity;
+    private final Path trustStore;
+    private final Path passwordFile;
 
-    private ClientRequest(String command, List<String> topics, String message, String host, int port, int heartbeatMs, String logLevel, ConfirmationMode confirm, StartPosition from, boolean resume, Path resumeFile) {
+    private ClientRequest(String command, List<String> topics, String message, String host, int port, int heartbeatMs, String logLevel, ConfirmationMode confirm, StartPosition from, boolean resume, Path resumeFile, Path identity, Path trustStore, Path passwordFile) {
         this.command = command;
         this.topics = topics;
         this.message = message;
@@ -32,6 +35,9 @@ final class ClientRequest {
         this.from = from;
         this.resume = resume;
         this.resumeFile = resumeFile;
+        this.identity = identity;
+        this.trustStore = trustStore;
+        this.passwordFile = passwordFile;
     }
 
     static ClientRequest parse(String[] args) {
@@ -54,6 +60,9 @@ final class ClientRequest {
         StartPosition from = null;
         boolean resume = false;
         Path resumeFile = null;
+        Path identity = null;
+        Path trustStore = null;
+        Path passwordFile = null;
         for (int index = 1; index < args.length; index++) {
             switch (args[index]) {
                 case "--topic" -> {
@@ -149,6 +158,39 @@ final class ClientRequest {
                     resumeFile = Path.of(value);
                     index++;
                 }
+                case "--identity" -> {
+                    if (identity != null) {
+                        return null;
+                    }
+                    String value = value(args, index + 1);
+                    if (value == null) {
+                        return null;
+                    }
+                    identity = Path.of(value);
+                    index++;
+                }
+                case "--trust-store" -> {
+                    if (trustStore != null) {
+                        return null;
+                    }
+                    String value = value(args, index + 1);
+                    if (value == null) {
+                        return null;
+                    }
+                    trustStore = Path.of(value);
+                    index++;
+                }
+                case "--password-file" -> {
+                    if (passwordFile != null) {
+                        return null;
+                    }
+                    String value = value(args, index + 1);
+                    if (value == null) {
+                        return null;
+                    }
+                    passwordFile = Path.of(value);
+                    index++;
+                }
                 case "--log-level" -> {
                     if (logLevel != null) {
                         return null;
@@ -175,7 +217,12 @@ final class ClientRequest {
         int resolvedHeartbeat = heartbeatMs == null ? 10_000 : heartbeatMs;
         String resolvedLevel = logLevel == null ? "INFO" : logLevel;
         ConfirmationMode resolvedConfirm = confirm == null ? ConfirmationMode.BROKER : confirm;
-        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedHeartbeat, resolvedLevel, resolvedConfirm, from, resume, resumeFile);
+        Path resolvedIdentity = identity != null
+                ? identity
+                : Path.of("produce".equals(command) ? "./config/pki/producer.p12" : "./config/pki/consumer.p12");
+        Path resolvedTrust = trustStore != null ? trustStore : Path.of("./config/pki/trust.p12");
+        Path resolvedPassword = passwordFile != null ? passwordFile : Path.of("./config/pki/password");
+        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedHeartbeat, resolvedLevel, resolvedConfirm, from, resume, resumeFile, resolvedIdentity, resolvedTrust, resolvedPassword);
     }
 
     String command() {
@@ -220,6 +267,18 @@ final class ClientRequest {
 
     Path resumeFile() {
         return resumeFile == null ? Path.of("dess-offsets") : resumeFile;
+    }
+
+    Path identity() {
+        return identity;
+    }
+
+    Path trustStore() {
+        return trustStore;
+    }
+
+    Path passwordFile() {
+        return passwordFile;
     }
 
     private static StartPosition start(String value) {

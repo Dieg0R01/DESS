@@ -225,7 +225,9 @@ class TopicPersistenceTest {
         for (String topic : topics) {
             builder.append("<topic>").append(topic).append("</topic>");
         }
-        builder.append("</topics></broker>");
+        builder.append("</topics>");
+        builder.append(TestConfigs.securityXml());
+        builder.append("</broker>");
         Files.writeString(file, builder.toString());
     }
 

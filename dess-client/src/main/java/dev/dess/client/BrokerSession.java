@@ -12,6 +12,9 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 
 public final class BrokerSession implements AutoCloseable {
 
@@ -27,14 +30,24 @@ public final class BrokerSession implements AutoCloseable {
         this.output = socket.getOutputStream();
     }
 
-    public static BrokerSession connect(String host, int port, int heartbeatMs) throws IOException {
-        Socket socket = new Socket();
+    public static BrokerSession connect(String host, int port, int heartbeatMs, SSLContext context) throws IOException {
+        SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket();
         socket.setTcpNoDelay(true);
+        socket.setEnabledProtocols(ClientTls.PROTOCOLS);
+        SSLParameters parameters = socket.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm(null);
+        socket.setSSLParameters(parameters);
         try {
             socket.connect(new InetSocketAddress(host, port), 2_000);
         } catch (IOException ex) {
             socket.close();
             throw new IOException("broker unreachable at " + host + ":" + port, ex);
+        }
+        try {
+            socket.startHandshake();
+        } catch (IOException ex) {
+            socket.close();
+            throw new IOException(ClientTls.reason(ex), ex);
         }
         socket.setSoTimeout(Math.max(heartbeatMs, 2_000));
         BrokerSession session = new BrokerSession(socket);
@@ -89,6 +102,11 @@ public final class BrokerSession implements AutoCloseable {
                 return;
             }
             closed = true;
+            try {
+                socket.setSoTimeout(1);
+            } catch (IOException ex) {
+                // Closing still proceeds.
+            }
             try {
                 socket.shutdownOutput();
             } catch (IOException ex) {

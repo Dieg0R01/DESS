@@ -25,6 +25,19 @@ public final class TestConfigs {
     private TestConfigs() {
     }
 
+    public static String securityXml() {
+        return """
+                <security>
+                    <keyStore>%s</keyStore>
+                    <trustStore>%s</trustStore>
+                    <passwordFile>%s</passwordFile>
+                </security>
+                """.formatted(
+                TestPki.brokerStore().toAbsolutePath(),
+                TestPki.trustStore().toAbsolutePath(),
+                TestPki.passwordFile().toAbsolutePath());
+    }
+
     public static BrokerConfig durable(Path logDirectory, Durability durability, int syncIntervalMillis) {
         return new BrokerConfig(
                 0,

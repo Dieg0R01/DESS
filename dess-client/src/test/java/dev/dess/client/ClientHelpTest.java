@@ -39,14 +39,14 @@ class ClientHelpTest {
         assertEquals("", lines[3]);
         assertMessage(lines[0], "INFO", artifact);
         assertMessage(lines[1], "INFO", "dev");
-        assertMessage(lines[2], "INFO", "Usage: " + artifact + " produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]");
+        assertMessage(lines[2], "INFO", "Usage: " + artifact + " produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]");
     }
 
     private static void assertUsage(String stderr, String artifact) {
         String[] lines = stderr.split("\\R", -1);
         assertEquals(2, lines.length);
         assertEquals("", lines[1]);
-        assertMessage(lines[0], "INFO", "Usage: " + artifact + " produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--heartbeat-ms N] [--log-level LEVEL]");
+        assertMessage(lines[0], "INFO", "Usage: " + artifact + " produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]");
     }
 
     private static void assertMessage(String line, String level, String message) {

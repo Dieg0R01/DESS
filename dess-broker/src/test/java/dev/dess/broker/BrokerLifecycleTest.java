@@ -40,7 +40,7 @@ class BrokerLifecycleTest {
                 socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 2_000);
             }
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofSeconds(2)) < 0);
-            assertEquals(1, logs.count("event=broker.started", "version=4", "tcpPort=" + broker.port()));
+            assertEquals(1, logs.count("event=broker.started", "tls=true", "version=4", "tcpPort=" + broker.port()));
         }
     }
 
@@ -154,8 +154,9 @@ class BrokerLifecycleTest {
                 <broker>
                     <network><port>%d</port></network>
                     <storage><logDirectory>%s</logDirectory></storage>
+                    %s
                 </broker>
-                """.formatted(port, logDirectory.toAbsolutePath());
+                """.formatted(port, logDirectory.toAbsolutePath(), TestConfigs.securityXml());
         Files.writeString(file, document);
         return file;
     }

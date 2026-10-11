@@ -18,7 +18,7 @@ final class CliProcess {
         command.add("-cp");
         command.add(System.getProperty("java.class.path"));
         command.add("dev.dess.client.ClientMain");
-        command.addAll(args);
+        command.addAll(withTls(args));
         ProcessBuilder builder = new ProcessBuilder(command);
         if (input != null) {
             builder.redirectInput(input.toFile());
@@ -46,6 +46,22 @@ final class CliProcess {
             Files.deleteIfExists(output);
             Files.deleteIfExists(error);
         }
+    }
+
+    private static List<String> withTls(List<String> args) {
+        List<String> command = new ArrayList<>(args);
+        if (command.isEmpty()) {
+            return command;
+        }
+        String verb = command.get(0);
+        Path identity = "consume".equals(verb) ? TestPki.consumerStore() : TestPki.producerStore();
+        command.add("--identity");
+        command.add(identity.toString());
+        command.add("--trust-store");
+        command.add(TestPki.trustStore().toString());
+        command.add("--password-file");
+        command.add(TestPki.passwordFile().toString());
+        return command;
     }
 
     record Result(int exitCode, String stdout, String stderr) {

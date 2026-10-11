@@ -13,6 +13,7 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import javax.net.ssl.SSLSocket;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -162,8 +163,10 @@ final class ScriptedBroker implements AutoCloseable {
 
     private void serve() {
         try {
-            Socket socket = server.accept();
-            socket.setTcpNoDelay(true);
+            Socket accepted = server.accept();
+            accepted.setTcpNoDelay(true);
+            SSLSocket socket = TestPki.serverSocket(accepted);
+            socket.startHandshake();
             client = socket;
             InputStream input = socket.getInputStream();
             output = socket.getOutputStream();

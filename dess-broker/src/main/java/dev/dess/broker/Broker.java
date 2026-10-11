@@ -26,10 +26,12 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class Broker implements AutoCloseable {
 
     private final BrokerConfig config;
+    private final TlsMaterial tls;
     private final ServerSocket serverSocket;
     private final Thread acceptThread;
     private final ExecutorService readers;
     private final ExecutorService writers;
+    private final ExecutorService refuse;
     private final ScheduledExecutorService flowTimer;
     private final FlowControl flow;
     private final TopicRegistry registry;
@@ -54,6 +56,11 @@ public final class Broker implements AutoCloseable {
         });
         this.flow = new FlowControl(config.maxInFlight());
         try {
+            TlsMaterial.Result loaded = TlsMaterial.load(config);
+            if (!loaded.problems().isEmpty()) {
+                throw new TlsLoadException(loaded.problems());
+            }
+            this.tls = loaded.material();
             this.directory = LogDirectory.acquire(config.logDirectory());
             try {
                 TopicLogs.deleteTemporary(config.logDirectory());
@@ -83,6 +90,7 @@ public final class Broker implements AutoCloseable {
         this.startedAt = System.nanoTime();
         this.readers = newPool(config.maxConnections(), config.threadKeepAliveMillis());
         this.writers = newPool(config.maxConnections(), config.threadKeepAliveMillis());
+        this.refuse = refusePool(config.maxConnections(), config.threadKeepAliveMillis());
         this.acceptThread = new Thread(this::acceptLoop, "dess-accept-" + serverSocket.getLocalPort());
         this.acceptThread.setDaemon(false);
         switch (config.durability()) {
@@ -107,6 +115,7 @@ public final class Broker implements AutoCloseable {
         logEffective();
         Map<String, String> started = new LinkedHashMap<>();
         started.put("version", Integer.toString(FrameCodec.PROTOCOL_VERSION));
+        started.put("tls", "true");
         started.put("tcpPort", Integer.toString(serverSocket.getLocalPort()));
         if (config.configPath() != null) {
             started.put("configPath", config.configPath().toAbsolutePath().toString());
@@ -327,11 +336,13 @@ public final class Broker implements AutoCloseable {
         }
         readers.shutdownNow();
         writers.shutdownNow();
+        refuse.shutdownNow();
         flowTimer.shutdownNow();
         try {
             long shutdownMillis = config.shutdownTimeoutMillis();
             if (!readers.awaitTermination(shutdownMillis, TimeUnit.MILLISECONDS)
                     || !writers.awaitTermination(shutdownMillis, TimeUnit.MILLISECONDS)
+                    || !refuse.awaitTermination(shutdownMillis, TimeUnit.MILLISECONDS)
                     || !flowTimer.awaitTermination(shutdownMillis, TimeUnit.MILLISECONDS)) {
                 throw new IllegalStateException("Connection threads did not stop");
             }
@@ -369,7 +380,7 @@ public final class Broker implements AutoCloseable {
                 ClientConnection connection = null;
                 try {
                     long id = ids.incrementAndGet();
-                    connection = new ClientConnection(id, socket, config, registry, this, permits);
+                    connection = new ClientConnection(id, socket, config, registry, this, permits, tls);
                     connections.put(id, connection);
                     readers.execute(connection);
                 } catch (IOException | RejectedExecutionException ex) {
@@ -388,6 +399,23 @@ public final class Broker implements AutoCloseable {
                 }
             }
         }
+    }
+
+    private static ExecutorService refusePool(int queue, int keepAliveMillis) {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(
+                1,
+                1,
+                keepAliveMillis,
+                TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(queue),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "dess-refuse");
+                    thread.setDaemon(false);
+                    return thread;
+                },
+                new ThreadPoolExecutor.AbortPolicy());
+        pool.allowCoreThreadTimeOut(true);
+        return pool;
     }
 
     private static ExecutorService newPool(int threads, int keepAliveMillis) {
@@ -453,21 +481,63 @@ public final class Broker implements AutoCloseable {
         }
     }
 
-    private static void refuse(Socket socket) {
+    private void refuse(Socket socket) {
         try {
-            FrameCodec.write(socket.getOutputStream(), new Frame(
+            refuse.execute(() -> refuseOne(socket));
+        } catch (RejectedExecutionException ex) {
+            closeQuietly(socket);
+        }
+    }
+
+    private void refuseOne(Socket socket) {
+        TlsHandshake.Outcome outcome = TlsHandshake.open(socket, tls, config.idleTimeoutMillis());
+        if (outcome.failed()) {
+            logHandshakeFailed(remoteAddress(socket), outcome.reason(), outcome.detail());
+            closeQuietly(socket);
+            closeQuietly(outcome.socket());
+            return;
+        }
+        try {
+            FrameCodec.write(outcome.socket().getOutputStream(), new Frame(
                     Command.ERROR,
                     FrameCodec.errorHeader(ErrorCode.BROKER_BUSY.name(), "broker is busy"),
                     new byte[0]));
-            socket.shutdownOutput();
+            outcome.socket().shutdownOutput();
         } catch (IOException ex) {
             // The client may already have gone.
         } finally {
-            try {
-                socket.close();
-            } catch (IOException ex) {
-                // The refused socket is closed either way.
-            }
+            closeQuietly(socket);
+            closeQuietly(outcome.socket());
+        }
+    }
+
+    static void logHandshakeFailed(String remoteAddress, HandshakeReason reason, String detail) {
+        Map<String, String> properties = new LinkedHashMap<>();
+        properties.put("remoteAddress", remoteAddress);
+        properties.put("reason", reason.name());
+        if (reason == HandshakeReason.FAILED && detail != null) {
+            properties.put("detail", detail);
+        }
+        Logging.event("dev.dess.broker", "tls.handshake.failed", properties);
+    }
+
+    static String remoteAddress(Socket socket) {
+        return socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+    }
+
+    static void closeQuietly(Socket socket) {
+        if (socket == null) {
+            return;
+        }
+        try {
+            socket.setSoTimeout(1);
+        } catch (IOException ex) {
+            // Closing still proceeds.
+        }
+        try {
+            socket.close();
+        } catch (IOException ex) {
+            // The refused socket is closed either way.
         }
     }
 }

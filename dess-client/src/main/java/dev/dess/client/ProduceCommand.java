@@ -14,6 +14,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import javax.net.ssl.SSLContext;
 
 final class ProduceCommand {
 
@@ -21,9 +22,15 @@ final class ProduceCommand {
     }
 
     static int execute(ClientRequest request, InputStream in, PrintStream err) {
+        SSLContext tls;
+        try {
+            tls = ClientTls.context(request.identity(), request.trustStore(), request.passwordFile());
+        } catch (IOException ex) {
+            return fail(err, ex.getMessage());
+        }
         BrokerSession session;
         try {
-            session = BrokerSession.connect(request.host(), request.port(), request.heartbeatMs());
+            session = BrokerSession.connect(request.host(), request.port(), request.heartbeatMs(), tls);
         } catch (IOException ex) {
             return fail(err, unreachable(request, ex));
         }
@@ -98,9 +105,13 @@ final class ProduceCommand {
     }
 
     private static String unreachable(ClientRequest request, IOException ex) {
+        String message = ex.getMessage();
+        if (ClientTls.isHandshakeFailure(message)) {
+            return message;
+        }
         String endpoint = request.host() + ":" + request.port();
-        if (ex.getMessage() != null && ex.getMessage().contains(endpoint)) {
-            return ex.getMessage();
+        if (message != null && message.contains(endpoint)) {
+            return message;
         }
         return "broker unreachable at " + endpoint;
     }

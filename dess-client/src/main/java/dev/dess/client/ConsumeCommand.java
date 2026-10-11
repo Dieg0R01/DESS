@@ -12,6 +12,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import javax.net.ssl.SSLContext;
 
 final class ConsumeCommand {
 
@@ -19,9 +20,16 @@ final class ConsumeCommand {
     }
 
     static int execute(ClientRequest request, PrintStream out, PrintStream err) {
+        SSLContext tls;
+        try {
+            tls = ClientTls.context(request.identity(), request.trustStore(), request.passwordFile());
+        } catch (IOException ex) {
+            err.println(Logging.format("ERROR", "dev.dess.client", ex.getMessage()));
+            return 1;
+        }
         BrokerSession session;
         try {
-            session = BrokerSession.connect(request.host(), request.port(), request.heartbeatMs());
+            session = BrokerSession.connect(request.host(), request.port(), request.heartbeatMs(), tls);
         } catch (IOException ex) {
             err.println(Logging.format("ERROR", "dev.dess.client", unreachable(request, ex)));
             return 1;
@@ -125,9 +133,13 @@ final class ConsumeCommand {
     }
 
     private static String unreachable(ClientRequest request, IOException ex) {
+        String message = ex.getMessage();
+        if (ClientTls.isHandshakeFailure(message)) {
+            return message;
+        }
         String endpoint = request.host() + ":" + request.port();
-        if (ex.getMessage() != null && ex.getMessage().contains(endpoint)) {
-            return ex.getMessage();
+        if (message != null && message.contains(endpoint)) {
+            return message;
         }
         return "broker unreachable at " + endpoint;
     }

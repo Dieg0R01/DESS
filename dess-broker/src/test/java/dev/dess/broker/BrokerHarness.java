@@ -2,10 +2,8 @@ package dev.dess.broker;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.util.Set;
+import javax.net.ssl.SSLSocket;
 
 public final class BrokerHarness implements AutoCloseable {
 
@@ -21,8 +19,8 @@ public final class BrokerHarness implements AutoCloseable {
 
     public static BrokerHarness start(BrokerConfig config) {
         Broker broker = open(config);
-        try (Socket probe = new Socket()) {
-            probe.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), broker.port()), 2_000);
+        try (SSLSocket probe = TestPki.clientSocket(broker.port())) {
+            probe.startHandshake();
             return new BrokerHarness(broker);
         } catch (IOException ex) {
             broker.close();

@@ -49,6 +49,11 @@ public final class BrokerMain {
         Broker broker;
         try {
             broker = Broker.start(loaded.config());
+        } catch (TlsLoadException ex) {
+            for (String problem : ex.problems()) {
+                err.println(problem);
+            }
+            return 1;
         } catch (IOException ex) {
             err.println(ex.getMessage() == null ? ex.toString() : ex.getMessage());
             return 1;
