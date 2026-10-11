@@ -127,20 +127,29 @@ public final class TestConfigs {
     }
 
     public static BrokerConfig discoveryEnabled(int discoveryPort) {
-        return discovery(true, false, discoveryPort);
+        return discovery(32, true, false, discoveryPort);
     }
 
     public static BrokerConfig discoveryDisabled(int discoveryPort) {
-        return discovery(false, true, discoveryPort);
+        return discovery(32, false, true, discoveryPort);
     }
 
-    private static BrokerConfig discovery(boolean discoveryEnabled, boolean presenceEnabled, int discoveryPort) {
+    public static BrokerConfig presenceEnabled(int discoveryPort) {
+        return presence(32, discoveryPort);
+    }
+
+    public static BrokerConfig presence(int maxConnections, int discoveryPort) {
+        return discovery(maxConnections, true, true, discoveryPort);
+    }
+
+    private static BrokerConfig discovery(
+            int maxConnections, boolean discoveryEnabled, boolean presenceEnabled, int discoveryPort) {
         try {
             Path logDirectory = Files.createTempDirectory("dess-test-log");
             logDirectory.toFile().deleteOnExit();
             return new BrokerConfig(
                     0,
-                    32,
+                    maxConnections,
                     TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES,
                     120_000,
                     TestConfigs.DEFAULT_MAX_IN_FLIGHT,

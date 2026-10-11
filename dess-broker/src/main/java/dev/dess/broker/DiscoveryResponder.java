@@ -21,19 +21,22 @@ final class DiscoveryResponder implements AutoCloseable {
     private final long brokerId;
     private final int tcpPort;
     private final boolean discoveryEnabled;
+    private final PresenceTracker presence;
     private volatile boolean running = true;
 
-    private DiscoveryResponder(DatagramSocket socket, int tcpPort, boolean discoveryEnabled) {
+    private DiscoveryResponder(DatagramSocket socket, int tcpPort, boolean discoveryEnabled, PresenceTracker presence) {
         this.socket = socket;
         this.tcpPort = tcpPort;
         this.discoveryEnabled = discoveryEnabled;
+        this.presence = presence;
         this.brokerId = ThreadLocalRandom.current().nextLong();
         this.thread = new Thread(this::loop, "dess-discovery");
         this.thread.setDaemon(false);
         this.thread.start();
     }
 
-    static DiscoveryResponder open(int port, int tcpPort, boolean discoveryEnabled, int idleTimeoutMillis)
+    static DiscoveryResponder open(
+            int port, int tcpPort, boolean discoveryEnabled, int idleTimeoutMillis, PresenceTracker presence)
             throws IOException {
         DatagramSocket socket = new DatagramSocket(null);
         socket.setReuseAddress(true);
@@ -50,7 +53,7 @@ final class DiscoveryResponder implements AutoCloseable {
             socket.close();
             throw new IOException("Could not bind discovery port " + port, ex);
         }
-        return new DiscoveryResponder(socket, tcpPort, discoveryEnabled);
+        return new DiscoveryResponder(socket, tcpPort, discoveryEnabled, presence);
     }
 
     int port() {
@@ -96,6 +99,16 @@ final class DiscoveryResponder implements AutoCloseable {
             }
             byte[] encoded = Arrays.copyOf(packet.getData(), packet.getLength());
             Object decoded = DiscoveryCodec.tryDecode(encoded);
+            if (decoded instanceof DiscoveryCodec.Presence announcement) {
+                if (presence != null) {
+                    presence.announce(
+                            announcement.instanceId(),
+                            announcement.name(),
+                            packet.getAddress().getHostAddress() + ":" + packet.getPort(),
+                            announcement.intervalMillis());
+                }
+                continue;
+            }
             if (!(decoded instanceof DiscoveryCodec.Request request)) {
                 continue;
             }

@@ -43,6 +43,13 @@ final class ProduceCommand {
         } catch (IOException ex) {
             return fail(err, unreachable(endpoint, ex));
         }
+        PresenceAnnouncer announcer;
+        try {
+            announcer = PresenceAnnouncer.startIfRequested(request, endpoint);
+        } catch (IOException ex) {
+            session.close();
+            return fail(err, ex.getMessage());
+        }
         try {
             for (byte[] payload : payloads(request, in)) {
                 session.publish(request.topics().get(0), payload, request.confirm());
@@ -63,6 +70,9 @@ final class ProduceCommand {
         } catch (IOException ex) {
             return fail(err, "connection closed");
         } finally {
+            if (announcer != null) {
+                announcer.close();
+            }
             session.close();
         }
     }

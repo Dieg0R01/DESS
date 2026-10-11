@@ -45,6 +45,24 @@ final class ConsumeCommand {
             err.println(Logging.format("ERROR", "dev.dess.client", unreachable(endpoint, ex)));
             return 1;
         }
+        PresenceAnnouncer announcer;
+        try {
+            announcer = PresenceAnnouncer.startIfRequested(request, endpoint);
+        } catch (IOException ex) {
+            session.close();
+            err.println(Logging.format("ERROR", "dev.dess.client", ex.getMessage()));
+            return 1;
+        }
+        try {
+            return consume(request, session, out, err);
+        } finally {
+            if (announcer != null) {
+                announcer.close();
+            }
+        }
+    }
+
+    private static int consume(ClientRequest request, BrokerSession session, PrintStream out, PrintStream err) {
         OffsetFile offsets = null;
         if (request.resume()) {
             try {

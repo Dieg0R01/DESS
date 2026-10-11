@@ -10,6 +10,7 @@ import java.security.KeyStore;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateExpiredException;
 import java.security.cert.X509Certificate;
+import java.util.Collections;
 import javax.naming.InvalidNameException;
 import javax.naming.ldap.LdapName;
 import javax.naming.ldap.Rdn;
@@ -61,6 +62,28 @@ final class ClientTls {
         }
     }
 
+    static String commonName(Path identity, Path passwordFile) throws IOException {
+        Path identityPath = identity.toAbsolutePath();
+        Path passwordPath = passwordFile.toAbsolutePath();
+        String password = firstLine(passwordPath);
+        try {
+            KeyStore keys = store(identityPath, password);
+            for (String alias : Collections.list(keys.aliases())) {
+                if (!keys.isKeyEntry(alias)) {
+                    continue;
+                }
+                X509Certificate leaf = (X509Certificate) keys.getCertificate(alias);
+                String name = cn(leaf);
+                if (name != null) {
+                    return name;
+                }
+            }
+            throw new IOException(identityPath + ": identity store has no CN");
+        } catch (GeneralSecurityException ex) {
+            throw new IOException(identityPath + ": cannot be opened with that password", ex);
+        }
+    }
+
     static boolean isHandshakeFailure(String message) {
         return "EXPIRED".equals(message)
                 || "UNTRUSTED".equals(message)
@@ -81,6 +104,23 @@ final class ClientTls {
             KeyStore store = KeyStore.getInstance("PKCS12");
             store.load(input, password.toCharArray());
             return store;
+        }
+    }
+
+    private static String cn(X509Certificate certificate) {
+        try {
+            LdapName name = new LdapName(certificate.getSubjectX500Principal().getName(X500Principal.RFC2253));
+            for (Rdn rdn : name.getRdns()) {
+                if ("CN".equalsIgnoreCase(rdn.getType())) {
+                    String value = String.valueOf(rdn.getValue());
+                    if (!value.isBlank()) {
+                        return value;
+                    }
+                }
+            }
+            return null;
+        } catch (InvalidNameException ex) {
+            return null;
         }
     }
 

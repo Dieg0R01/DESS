@@ -29,6 +29,7 @@ public final class Broker implements AutoCloseable {
     private final TlsMaterial tls;
     private final ServerSocket serverSocket;
     private final DiscoveryResponder discovery;
+    private final PresenceTracker presence;
     private final Thread acceptThread;
     private final ExecutorService readers;
     private final ExecutorService writers;
@@ -79,10 +80,16 @@ public final class Broker implements AutoCloseable {
                 writer.includeRecovered(registry.names());
                 this.permits = new Semaphore(config.maxConnections());
                 ServerSocket bound = bind(config.port());
+                PresenceTracker tracker = config.presenceEnabled()
+                        ? PresenceTracker.open(config.maxConnections())
+                        : null;
                 DiscoveryResponder responder;
                 try {
-                    responder = openDiscovery(bound.getLocalPort());
+                    responder = openDiscovery(bound.getLocalPort(), tracker);
                 } catch (IOException ex) {
+                    if (tracker != null) {
+                        tracker.close(config.shutdownTimeoutMillis());
+                    }
                     try {
                         bound.close();
                     } catch (IOException suppressed) {
@@ -92,6 +99,7 @@ public final class Broker implements AutoCloseable {
                 }
                 this.serverSocket = bound;
                 this.discovery = responder;
+                this.presence = tracker;
             } catch (IOException ex) {
                 closeLogs(logs, ex);
                 closeDirectory(directory, ex);
@@ -183,12 +191,16 @@ public final class Broker implements AutoCloseable {
         Logging.event("dev.dess.broker", "config.effective", effective);
     }
 
-    private DiscoveryResponder openDiscovery(int tcpPort) throws IOException {
+    private DiscoveryResponder openDiscovery(int tcpPort, PresenceTracker tracker) throws IOException {
         if (!config.discoveryEnabled() && !config.presenceEnabled()) {
             return null;
         }
         return DiscoveryResponder.open(
-                config.discoveryPort(), tcpPort, config.discoveryEnabled(), config.idleTimeoutMillis());
+                config.discoveryPort(),
+                tcpPort,
+                config.discoveryEnabled(),
+                config.idleTimeoutMillis(),
+                tracker);
     }
 
     private static ServerSocket bind(int port) throws IOException {
@@ -235,6 +247,18 @@ public final class Broker implements AutoCloseable {
             throw new IllegalStateException("Discovery is not running");
         }
         return discovery.port();
+    }
+
+    int presenceCount() {
+        return presence == null ? 0 : presence.size();
+    }
+
+    boolean hasPresence(long instanceId) {
+        return presence != null && presence.contains(instanceId);
+    }
+
+    boolean presenceRunning() {
+        return presence != null;
     }
 
     public boolean isShuttingDown() {
@@ -341,6 +365,9 @@ public final class Broker implements AutoCloseable {
         }
         if (discovery != null) {
             discovery.close(config.shutdownTimeoutMillis());
+        }
+        if (presence != null) {
+            presence.close(config.shutdownTimeoutMillis());
         }
         int inFlightLost = flow.inFlight();
         stopSync();

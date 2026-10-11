@@ -7,7 +7,7 @@ import java.io.PrintStream;
 
 public final class ClientMain {
 
-    static final String USAGE = "Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--discovery-port N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]";
+    static final String USAGE = "Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--discovery-port N] [--presence-ms N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]";
 
     private ClientMain() {
     }

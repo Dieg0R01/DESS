@@ -44,6 +44,18 @@ public final class BrokerHarness implements AutoCloseable {
         return broker.discoveryPort();
     }
 
+    public int presenceCount() {
+        return broker.presenceCount();
+    }
+
+    public boolean hasPresence(long instanceId) {
+        return broker.hasPresence(instanceId);
+    }
+
+    public boolean presenceRunning() {
+        return broker.presenceRunning();
+    }
+
     public int inFlight() {
         return broker.inFlight();
     }
