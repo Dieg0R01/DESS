@@ -40,6 +40,10 @@ public final class BrokerHarness implements AutoCloseable {
         return broker.port();
     }
 
+    public int discoveryPort() {
+        return broker.discoveryPort();
+    }
+
     public int inFlight() {
         return broker.inFlight();
     }

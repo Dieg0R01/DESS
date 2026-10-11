@@ -28,6 +28,7 @@ public final class Broker implements AutoCloseable {
     private final BrokerConfig config;
     private final TlsMaterial tls;
     private final ServerSocket serverSocket;
+    private final DiscoveryResponder discovery;
     private final Thread acceptThread;
     private final ExecutorService readers;
     private final ExecutorService writers;
@@ -77,7 +78,20 @@ public final class Broker implements AutoCloseable {
                 }
                 writer.includeRecovered(registry.names());
                 this.permits = new Semaphore(config.maxConnections());
-                this.serverSocket = bind(config.port());
+                ServerSocket bound = bind(config.port());
+                DiscoveryResponder responder;
+                try {
+                    responder = openDiscovery(bound.getLocalPort());
+                } catch (IOException ex) {
+                    try {
+                        bound.close();
+                    } catch (IOException suppressed) {
+                        ex.addSuppressed(suppressed);
+                    }
+                    throw ex;
+                }
+                this.serverSocket = bound;
+                this.discovery = responder;
             } catch (IOException ex) {
                 closeLogs(logs, ex);
                 closeDirectory(directory, ex);
@@ -169,6 +183,14 @@ public final class Broker implements AutoCloseable {
         Logging.event("dev.dess.broker", "config.effective", effective);
     }
 
+    private DiscoveryResponder openDiscovery(int tcpPort) throws IOException {
+        if (!config.discoveryEnabled() && !config.presenceEnabled()) {
+            return null;
+        }
+        return DiscoveryResponder.open(
+                config.discoveryPort(), tcpPort, config.discoveryEnabled(), config.idleTimeoutMillis());
+    }
+
     private static ServerSocket bind(int port) throws IOException {
         try {
             return new ServerSocket(port);
@@ -206,6 +228,13 @@ public final class Broker implements AutoCloseable {
             throw new IllegalStateException("Broker is not running");
         }
         return serverSocket.getLocalPort();
+    }
+
+    public int discoveryPort() {
+        if (!running || discovery == null) {
+            throw new IllegalStateException("Discovery is not running");
+        }
+        return discovery.port();
     }
 
     public boolean isShuttingDown() {
@@ -309,6 +338,9 @@ public final class Broker implements AutoCloseable {
         }
         if (acceptThread.isAlive()) {
             throw new IllegalStateException("Accept thread " + acceptThread.getName() + " did not stop");
+        }
+        if (discovery != null) {
+            discovery.close(config.shutdownTimeoutMillis());
         }
         int inFlightLost = flow.inFlight();
         stopSync();

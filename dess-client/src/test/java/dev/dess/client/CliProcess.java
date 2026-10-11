@@ -61,7 +61,15 @@ final class CliProcess {
         command.add(TestPki.trustStore().toString());
         command.add("--password-file");
         command.add(TestPki.passwordFile().toString());
+        if (hasFlag(command, "--port") && !hasFlag(command, "--host")) {
+            command.add("--host");
+            command.add("127.0.0.1");
+        }
         return command;
+    }
+
+    private static boolean hasFlag(List<String> command, String flag) {
+        return command.contains(flag);
     }
 
     record Result(int exitCode, String stdout, String stderr) {

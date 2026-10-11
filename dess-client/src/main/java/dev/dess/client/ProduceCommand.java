@@ -28,11 +28,20 @@ final class ProduceCommand {
         } catch (IOException ex) {
             return fail(err, ex.getMessage());
         }
+        Discovery.Endpoint endpoint;
+        try {
+            endpoint = Discovery.resolve(request);
+        } catch (IOException ex) {
+            return fail(err, "no broker found");
+        }
+        if (endpoint == null) {
+            return fail(err, "no broker found");
+        }
         BrokerSession session;
         try {
-            session = BrokerSession.connect(request.host(), request.port(), request.heartbeatMs(), tls);
+            session = BrokerSession.connect(endpoint.host(), endpoint.port(), request.heartbeatMs(), tls);
         } catch (IOException ex) {
-            return fail(err, unreachable(request, ex));
+            return fail(err, unreachable(endpoint, ex));
         }
         try {
             for (byte[] payload : payloads(request, in)) {
@@ -104,16 +113,16 @@ final class ProduceCommand {
         }
     }
 
-    private static String unreachable(ClientRequest request, IOException ex) {
+    private static String unreachable(Discovery.Endpoint endpoint, IOException ex) {
         String message = ex.getMessage();
         if (ClientTls.isHandshakeFailure(message)) {
             return message;
         }
-        String endpoint = request.host() + ":" + request.port();
-        if (message != null && message.contains(endpoint)) {
+        String target = endpoint.host() + ":" + endpoint.port();
+        if (message != null && message.contains(target)) {
             return message;
         }
-        return "broker unreachable at " + endpoint;
+        return "broker unreachable at " + target;
     }
 
     private static int fail(PrintStream err, String message) {

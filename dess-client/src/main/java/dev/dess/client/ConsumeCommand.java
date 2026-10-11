@@ -27,11 +27,22 @@ final class ConsumeCommand {
             err.println(Logging.format("ERROR", "dev.dess.client", ex.getMessage()));
             return 1;
         }
+        Discovery.Endpoint endpoint;
+        try {
+            endpoint = Discovery.resolve(request);
+        } catch (IOException ex) {
+            err.println(Logging.format("ERROR", "dev.dess.client", "no broker found"));
+            return 1;
+        }
+        if (endpoint == null) {
+            err.println(Logging.format("ERROR", "dev.dess.client", "no broker found"));
+            return 1;
+        }
         BrokerSession session;
         try {
-            session = BrokerSession.connect(request.host(), request.port(), request.heartbeatMs(), tls);
+            session = BrokerSession.connect(endpoint.host(), endpoint.port(), request.heartbeatMs(), tls);
         } catch (IOException ex) {
-            err.println(Logging.format("ERROR", "dev.dess.client", unreachable(request, ex)));
+            err.println(Logging.format("ERROR", "dev.dess.client", unreachable(endpoint, ex)));
             return 1;
         }
         OffsetFile offsets = null;
@@ -145,15 +156,15 @@ final class ConsumeCommand {
         }
     }
 
-    private static String unreachable(ClientRequest request, IOException ex) {
+    private static String unreachable(Discovery.Endpoint endpoint, IOException ex) {
         String message = ex.getMessage();
         if (ClientTls.isHandshakeFailure(message)) {
             return message;
         }
-        String endpoint = request.host() + ":" + request.port();
-        if (message != null && message.contains(endpoint)) {
+        String target = endpoint.host() + ":" + endpoint.port();
+        if (message != null && message.contains(target)) {
             return message;
         }
-        return "broker unreachable at " + endpoint;
+        return "broker unreachable at " + target;
     }
 }

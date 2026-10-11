@@ -125,4 +125,47 @@ public final class TestConfigs {
             throw new UncheckedIOException(ex);
         }
     }
+
+    public static BrokerConfig discoveryEnabled(int discoveryPort) {
+        return discovery(true, false, discoveryPort);
+    }
+
+    public static BrokerConfig discoveryDisabled(int discoveryPort) {
+        return discovery(false, true, discoveryPort);
+    }
+
+    private static BrokerConfig discovery(boolean discoveryEnabled, boolean presenceEnabled, int discoveryPort) {
+        try {
+            Path logDirectory = Files.createTempDirectory("dess-test-log");
+            logDirectory.toFile().deleteOnExit();
+            return new BrokerConfig(
+                    0,
+                    32,
+                    TestConfigs.DEFAULT_MAX_PAYLOAD_BYTES,
+                    120_000,
+                    TestConfigs.DEFAULT_MAX_IN_FLIGHT,
+                    TestConfigs.DEFAULT_TOPIC_QUEUE_CAPACITY,
+                    TestConfigs.DEFAULT_OUTBOUND_CAPACITY,
+                    TestConfigs.DEFAULT_SLOW_CONSUMER_GRACE_MILLIS,
+                    TestConfigs.DEFAULT_PUBLISH_WAIT_MILLIS,
+                    TestConfigs.DEFAULT_ACK_TIMEOUT_MILLIS,
+                    true,
+                    List.of(),
+                    logDirectory,
+                    Durability.INTERVAL,
+                    60_000,
+                    "INFO",
+                    1_000,
+                    2_000,
+                    TestPki.brokerStore(),
+                    TestPki.trustStore(),
+                    TestPki.passwordFile(),
+                    discoveryEnabled,
+                    discoveryPort,
+                    presenceEnabled,
+                    null);
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
 }
