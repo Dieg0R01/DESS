@@ -85,6 +85,27 @@ class ProduceCommandTest {
     }
 
     @Test
+    void fromFlagIsRejected() throws Exception {
+        CliProcess.Result result = CliProcess.run(null, List.of(
+                "produce", "--topic", "sales", "--message", "hello", "--from", "earliest"));
+        assertEquals(2, result.exitCode(), result.stderr());
+    }
+
+    @Test
+    void resumeFlagIsRejected() throws Exception {
+        CliProcess.Result result = CliProcess.run(null, List.of(
+                "produce", "--topic", "sales", "--message", "hello", "--resume"));
+        assertEquals(2, result.exitCode(), result.stderr());
+    }
+
+    @Test
+    void resumeFileFlagIsRejected() throws Exception {
+        CliProcess.Result result = CliProcess.run(null, List.of(
+                "produce", "--topic", "sales", "--message", "hello", "--resume-file", "offsets"));
+        assertEquals(2, result.exitCode(), result.stderr());
+    }
+
+    @Test
     void unknownConfirmExitsTwo() throws Exception {
         CliProcess.Result result = CliProcess.run(null, List.of(
                 "produce", "--topic", "sales", "--message", "hello", "--confirm", "SOME"));

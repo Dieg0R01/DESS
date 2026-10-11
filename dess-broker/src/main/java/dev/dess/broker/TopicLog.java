@@ -92,6 +92,44 @@ final class TopicLog {
         }
     }
 
+    /** File position of a record already visible under the topic lock. */
+    long position(long offset) {
+        return positions[(int) offset];
+    }
+
+    byte[] payload(long filePosition) throws IOException {
+        ByteBuffer lengthBuffer = ByteBuffer.allocate(4);
+        readFully(channel, lengthBuffer, filePosition);
+        lengthBuffer.flip();
+        int bodyLength = lengthBuffer.getInt();
+        if (bodyLength < FIXED_BODY) {
+            throw damaged(filePosition);
+        }
+        ByteBuffer body = ByteBuffer.allocate(bodyLength);
+        readFully(channel, body, filePosition + 4);
+        body.flip();
+        CRC32 crc = new CRC32();
+        crc.update(body.array(), 0, bodyLength - 4);
+        int version = body.get() & 0xff;
+        body.getLong();
+        body.getLong();
+        int payloadLength = body.getInt();
+        if (payloadLength < 0 || FIXED_BODY + (long) payloadLength != bodyLength || version != VERSION) {
+            throw damaged(filePosition);
+        }
+        byte[] stored = new byte[payloadLength];
+        body.get(stored);
+        long actual = Integer.toUnsignedLong(body.getInt());
+        if (actual != crc.getValue()) {
+            throw damaged(filePosition);
+        }
+        return stored;
+    }
+
+    private IOException damaged(long filePosition) {
+        return new IOException("Damaged record in " + file.toAbsolutePath() + " at " + filePosition);
+    }
+
     Written append(byte[] payload) throws IOException {
         appendLock.lock();
         try {

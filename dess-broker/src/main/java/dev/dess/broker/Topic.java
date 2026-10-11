@@ -1,6 +1,7 @@
 package dev.dess.broker;
 
 import dev.dess.common.protocol.ConfirmationMode;
+import dev.dess.common.protocol.StartPosition;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -78,24 +79,29 @@ final class Topic {
         }
     }
 
-    boolean add(ClientConnection connection) {
+    Membership add(ClientConnection connection, StartPosition start) {
         lock.lock();
         try {
             if (connection.isClosing() || subscriptions.containsKey(connection.id())) {
-                return false;
+                return Membership.UNCHANGED;
             }
-            Subscription subscription = new Subscription(connection, this, nextOffset);
+            Long cursor = cursor(start);
+            if (cursor == null) {
+                return Membership.INVALID_OFFSET;
+            }
+            Subscription subscription = new Subscription(connection, this, cursor, nextOffset);
             subscriptions.put(connection.id(), subscription);
             connection.remember(subscription);
             if (!connection.isClosing()) {
-                return true;
+                markReady(subscription);
+                return Membership.ADDED;
             }
             subscriptions.remove(connection.id());
             connection.forget(name);
             subscription.deactivate();
             releaseOwed(subscription);
             reclaim();
-            return false;
+            return Membership.UNCHANGED;
         } finally {
             lock.unlock();
         }
@@ -198,17 +204,22 @@ final class Topic {
     Delivery claim(Subscription subscription) {
         lock.lock();
         try {
-            if (!subscription.isActive() || subscription.cursor() >= nextOffset || ring == null) {
+            if (!subscription.isActive() || subscription.cursor() >= nextOffset) {
                 return null;
             }
-            Entry entry = ring[index(subscription.cursor())];
-            if (entry == null || entry.payload == null) {
-                return null;
+            long offset = subscription.cursor();
+            Entry entry = ring == null ? null : ring[index(offset)];
+            if (entry != null && entry.offset == offset && entry.payload != null) {
+                return new Delivery(offset, entry.payload, -1L);
             }
-            return new Delivery(entry.offset, entry.payload);
+            return new Delivery(offset, null, log.position(offset));
         } finally {
             lock.unlock();
         }
+    }
+
+    byte[] retainedPayload(long filePosition) throws IOException {
+        return log.payload(filePosition);
     }
 
     void handOff(Subscription subscription) {
@@ -250,9 +261,10 @@ final class Topic {
                 subscription.clearScheduled();
                 return;
             }
-            Entry entry = ring[index(subscription.cursor())];
+            long offset = subscription.cursor();
+            Entry entry = ring == null ? null : ring[index(offset)];
             subscription.advanceCursor();
-            if (entry != null) {
+            if (offset >= subscription.countedFrom() && entry != null && entry.offset == offset) {
                 release(entry);
             }
             if (nextOffset - subscription.cursor() < outboundCapacity) {
@@ -317,10 +329,33 @@ final class Topic {
         if (ring == null) {
             return;
         }
-        for (long offset = subscription.cursor(); offset < nextOffset; offset++) {
+        long start = Math.max(subscription.cursor(), subscription.countedFrom());
+        for (long offset = start; offset < nextOffset; offset++) {
             Entry entry = ring[index(offset)];
-            if (entry != null) {
+            if (entry != null && entry.offset == offset) {
                 release(entry);
+            }
+        }
+    }
+
+    private Long cursor(StartPosition start) {
+        switch (start.kind()) {
+            case LATEST -> {
+                return nextOffset;
+            }
+            case EARLIEST -> {
+                return 0L;
+            }
+            case OFFSET -> {
+                long offset = start.offset();
+                if (offset < 0 || offset > nextOffset) {
+                    return null;
+                }
+                return offset;
+            }
+            default -> {
+                StartPosition.Kind unexpected = start.kind();
+                throw new IllegalStateException("Unhandled start position " + unexpected);
             }
         }
     }
@@ -428,9 +463,12 @@ final class Topic {
 
         private final byte[] payload;
 
-        private Delivery(long offset, byte[] payload) {
+        private final long filePosition;
+
+        private Delivery(long offset, byte[] payload, long filePosition) {
             this.offset = offset;
             this.payload = payload;
+            this.filePosition = filePosition;
         }
 
         long offset() {
@@ -440,6 +478,16 @@ final class Topic {
         byte[] payload() {
             return payload;
         }
+
+        long filePosition() {
+            return filePosition;
+        }
+    }
+
+    enum Membership {
+        ADDED,
+        UNCHANGED,
+        INVALID_OFFSET
     }
 
     private static final class Entry {

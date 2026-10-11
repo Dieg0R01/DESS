@@ -10,6 +10,9 @@ final class Subscription {
 
     private final long subscribedAt;
 
+    /** Offsets at or after this value were counted in the ring when they were accepted. */
+    private final long countedFrom;
+
     /** Guarded by the topic lock. */
     private long cursor;
 
@@ -25,10 +28,11 @@ final class Subscription {
     /** True while this subscription is queued for its writer or being written. */
     private final AtomicBoolean scheduled = new AtomicBoolean();
 
-    Subscription(ClientConnection connection, Topic topic, long subscribedAt) {
+    Subscription(ClientConnection connection, Topic topic, long subscribedAt, long countedFrom) {
         this.connection = connection;
         this.topic = topic;
         this.subscribedAt = subscribedAt;
+        this.countedFrom = countedFrom;
         this.cursor = subscribedAt;
         this.handedOff = subscribedAt;
     }
@@ -43,6 +47,10 @@ final class Subscription {
 
     long subscribedAt() {
         return subscribedAt;
+    }
+
+    long countedFrom() {
+        return countedFrom;
     }
 
     long cursor() {

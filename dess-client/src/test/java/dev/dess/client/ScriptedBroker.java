@@ -5,6 +5,7 @@ import dev.dess.common.protocol.ConfirmationMode;
 import dev.dess.common.protocol.ErrorCode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
+import dev.dess.common.protocol.StartPosition;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -60,7 +61,26 @@ final class ScriptedBroker implements AutoCloseable {
     }
 
     void deliver(String topic, byte[] payload) throws IOException {
-        write(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, nextOffset++), payload));
+        deliver(topic, nextOffset, payload);
+    }
+
+    void deliver(String topic, long offset, byte[] payload) throws IOException {
+        write(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset), payload));
+        nextOffset = Math.max(nextOffset, offset + 1);
+    }
+
+    StartPosition startPosition(String topic) {
+        lock.lock();
+        try {
+            for (Frame frame : frames) {
+                if (frame.command() == Command.SUBSCRIBE && topic.equals(FrameCodec.leadingTopic(frame.header()))) {
+                    return FrameCodec.subscription(frame.header()).position();
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+        throw new AssertionError(topic);
     }
 
     List<Frame> frames() {

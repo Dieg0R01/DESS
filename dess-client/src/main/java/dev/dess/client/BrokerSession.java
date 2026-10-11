@@ -60,7 +60,11 @@ public final class BrokerSession implements AutoCloseable {
     }
 
     public void subscribe(String topic) throws IOException {
-        write(new Frame(Command.SUBSCRIBE, FrameCodec.subscribeHeader(topic, StartPosition.latest()), new byte[0]));
+        subscribe(topic, StartPosition.latest());
+    }
+
+    public void subscribe(String topic, StartPosition start) throws IOException {
+        write(new Frame(Command.SUBSCRIBE, FrameCodec.subscribeHeader(topic, start), new byte[0]));
     }
 
     public void unsubscribe(String topic) throws IOException {

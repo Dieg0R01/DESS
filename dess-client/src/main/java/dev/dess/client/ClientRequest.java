@@ -1,6 +1,8 @@
 package dev.dess.client;
 
 import dev.dess.common.protocol.ConfirmationMode;
+import dev.dess.common.protocol.StartPosition;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -14,8 +16,11 @@ final class ClientRequest {
     private final int heartbeatMs;
     private final String logLevel;
     private final ConfirmationMode confirm;
+    private final StartPosition from;
+    private final boolean resume;
+    private final Path resumeFile;
 
-    private ClientRequest(String command, List<String> topics, String message, String host, int port, int heartbeatMs, String logLevel, ConfirmationMode confirm) {
+    private ClientRequest(String command, List<String> topics, String message, String host, int port, int heartbeatMs, String logLevel, ConfirmationMode confirm, StartPosition from, boolean resume, Path resumeFile) {
         this.command = command;
         this.topics = topics;
         this.message = message;
@@ -24,6 +29,9 @@ final class ClientRequest {
         this.heartbeatMs = heartbeatMs;
         this.logLevel = logLevel;
         this.confirm = confirm;
+        this.from = from;
+        this.resume = resume;
+        this.resumeFile = resumeFile;
     }
 
     static ClientRequest parse(String[] args) {
@@ -43,6 +51,9 @@ final class ClientRequest {
         Integer heartbeatMs = null;
         String logLevel = null;
         ConfirmationMode confirm = null;
+        StartPosition from = null;
+        boolean resume = false;
+        Path resumeFile = null;
         for (int index = 1; index < args.length; index++) {
             switch (args[index]) {
                 case "--topic" -> {
@@ -110,6 +121,34 @@ final class ClientRequest {
                     }
                     index++;
                 }
+                case "--from" -> {
+                    if (!"consume".equals(command) || from != null) {
+                        return null;
+                    }
+                    String value = value(args, index + 1);
+                    from = start(value);
+                    if (from == null) {
+                        return null;
+                    }
+                    index++;
+                }
+                case "--resume" -> {
+                    if (!"consume".equals(command) || resume) {
+                        return null;
+                    }
+                    resume = true;
+                }
+                case "--resume-file" -> {
+                    if (!"consume".equals(command) || resumeFile != null) {
+                        return null;
+                    }
+                    String value = value(args, index + 1);
+                    if (value == null) {
+                        return null;
+                    }
+                    resumeFile = Path.of(value);
+                    index++;
+                }
                 case "--log-level" -> {
                     if (logLevel != null) {
                         return null;
@@ -129,11 +168,14 @@ final class ClientRequest {
         if (topics.isEmpty() || ("produce".equals(command) && topics.size() != 1)) {
             return null;
         }
+        if (resume && from != null) {
+            return null;
+        }
         int resolvedPort = port == null ? 55123 : port;
         int resolvedHeartbeat = heartbeatMs == null ? 10_000 : heartbeatMs;
         String resolvedLevel = logLevel == null ? "INFO" : logLevel;
         ConfirmationMode resolvedConfirm = confirm == null ? ConfirmationMode.BROKER : confirm;
-        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedHeartbeat, resolvedLevel, resolvedConfirm);
+        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedHeartbeat, resolvedLevel, resolvedConfirm, from, resume, resumeFile);
     }
 
     String command() {
@@ -166,6 +208,39 @@ final class ClientRequest {
 
     ConfirmationMode confirm() {
         return confirm;
+    }
+
+    StartPosition from() {
+        return from;
+    }
+
+    boolean resume() {
+        return resume;
+    }
+
+    Path resumeFile() {
+        return resumeFile == null ? Path.of("dess-offsets") : resumeFile;
+    }
+
+    private static StartPosition start(String value) {
+        if (value == null) {
+            return null;
+        }
+        if ("latest".equals(value)) {
+            return StartPosition.latest();
+        }
+        if ("earliest".equals(value)) {
+            return StartPosition.earliest();
+        }
+        try {
+            long offset = Long.parseLong(value);
+            if (offset < 0) {
+                return null;
+            }
+            return StartPosition.at(offset);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private static ConfirmationMode confirmation(String value) {

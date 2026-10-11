@@ -1,6 +1,7 @@
 package dev.dess.broker;
 
 import dev.dess.common.logging.Logging;
+import dev.dess.common.protocol.StartPosition;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -55,15 +56,32 @@ public final class TopicRegistry {
         resolve(name, true, "CONFIG");
     }
 
-    public boolean subscribe(ClientConnection connection, String name) throws IOException {
+    public SubscribeResult subscribe(ClientConnection connection, String name, StartPosition start) throws IOException {
         Topic topic = open(name);
         if (topic == null) {
-            return false;
+            return SubscribeResult.UNKNOWN;
         }
-        if (topic.add(connection)) {
-            event("subscription.added", Map.of("clientId", Long.toString(connection.id()), "topic", name));
+        Topic.Membership membership = topic.add(connection, start);
+        switch (membership) {
+            case ADDED -> {
+                Map<String, String> properties = new LinkedHashMap<>();
+                properties.put("clientId", Long.toString(connection.id()));
+                properties.put("topic", name);
+                properties.put("startPosition", startPosition(start));
+                event("subscription.added", properties);
+                return SubscribeResult.SUBSCRIBED;
+            }
+            case UNCHANGED -> {
+                return SubscribeResult.SUBSCRIBED;
+            }
+            case INVALID_OFFSET -> {
+                return SubscribeResult.INVALID_OFFSET;
+            }
+            default -> {
+                Topic.Membership unexpected = membership;
+                throw new IllegalStateException("Unhandled membership " + unexpected);
+            }
         }
-        return true;
     }
 
     boolean hasTopic(String name) {
@@ -138,6 +156,30 @@ public final class TopicRegistry {
 
     private static void event(String name, Map<String, String> properties) {
         Logging.event("dev.dess.broker", name, properties);
+    }
+
+    private static String startPosition(StartPosition start) {
+        switch (start.kind()) {
+            case LATEST -> {
+                return "LATEST";
+            }
+            case EARLIEST -> {
+                return "EARLIEST";
+            }
+            case OFFSET -> {
+                return Long.toString(start.offset());
+            }
+            default -> {
+                StartPosition.Kind unexpected = start.kind();
+                throw new IllegalStateException("Unhandled start position " + unexpected);
+            }
+        }
+    }
+
+    public enum SubscribeResult {
+        SUBSCRIBED,
+        UNKNOWN,
+        INVALID_OFFSET
     }
 
     private record PendingKey(String topic, long offset) {

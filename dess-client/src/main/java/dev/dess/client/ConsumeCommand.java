@@ -6,6 +6,7 @@ import dev.dess.common.protocol.Delivery;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import dev.dess.common.protocol.FrameException;
+import dev.dess.common.protocol.StartPosition;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
@@ -25,12 +26,22 @@ final class ConsumeCommand {
             err.println(Logging.format("ERROR", "dev.dess.client", unreachable(request, ex)));
             return 1;
         }
+        OffsetFile offsets = null;
+        if (request.resume()) {
+            try {
+                offsets = OffsetFile.open(request.resumeFile());
+            } catch (IOException ex) {
+                session.close();
+                err.println(Logging.format("ERROR", "dev.dess.client", ex.getMessage()));
+                return 1;
+            }
+        }
         List<String> subscribed = new ArrayList<>();
         Thread hook = new Thread(() -> stop(session, subscribed), "dess-client-shutdown");
         Runtime.getRuntime().addShutdownHook(hook);
         try {
             for (String topic : request.topics()) {
-                session.subscribe(topic);
+                session.subscribe(topic, position(request, offsets, topic));
                 synchronized (subscribed) {
                     subscribed.add(topic);
                 }
@@ -44,6 +55,9 @@ final class ConsumeCommand {
                     Delivery delivery = FrameCodec.delivery(frame.header());
                     String text = new String(frame.payload(), StandardCharsets.UTF_8);
                     out.println(delivery.topic() + " " + text);
+                    if (offsets != null) {
+                        offsets.acknowledge(delivery.topic(), delivery.offset());
+                    }
                     session.acknowledge(delivery.topic(), delivery.offset());
                 }
             }
@@ -55,6 +69,18 @@ final class ConsumeCommand {
             err.println(Logging.format("ERROR", "dev.dess.client", "connection closed"));
             return 1;
         }
+    }
+
+    private static StartPosition position(ClientRequest request, OffsetFile offsets, String topic) {
+        if (offsets == null) {
+            StartPosition chosen = request.from();
+            return chosen == null ? StartPosition.latest() : chosen;
+        }
+        Long stored = offsets.stored(topic);
+        if (stored == null) {
+            return StartPosition.latest();
+        }
+        return StartPosition.at(stored + 1);
     }
 
     private static void stop(BrokerSession session, List<String> subscribed) {

@@ -9,6 +9,8 @@ import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import dev.dess.common.protocol.FrameException;
 import dev.dess.common.protocol.Publication;
+import dev.dess.common.protocol.StartPosition;
+import dev.dess.common.protocol.SubscriptionRequest;
 import dev.dess.common.protocol.TopicName;
 import java.io.EOFException;
 import java.io.IOException;
@@ -298,20 +300,30 @@ public final class ClientConnection implements Runnable {
     }
 
     private void subscribe(Frame frame) throws IOException {
-        String topic;
+        SubscriptionRequest request;
         try {
-            topic = FrameCodec.subscription(frame.header()).topic();
+            request = FrameCodec.subscription(frame.header());
         } catch (FrameException ex) {
             fail(ErrorCode.MALFORMED_FRAME, "malformed topic");
             return;
         }
+        String topic = request.topic();
+        StartPosition start = request.position();
         if (!TopicName.isValid(topic)) {
             reject(topic, ErrorCode.INVALID_TOPIC_NAME, "invalid topic name");
             return;
         }
         try {
-            if (!registry.subscribe(this, topic)) {
-                reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
+            TopicRegistry.SubscribeResult result = registry.subscribe(this, topic, start);
+            switch (result) {
+                case SUBSCRIBED -> {
+                }
+                case UNKNOWN -> reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
+                case INVALID_OFFSET -> reject(topic, ErrorCode.INVALID_OFFSET, "invalid offset");
+                default -> {
+                    TopicRegistry.SubscribeResult unexpected = result;
+                    throw new IllegalStateException("Unhandled subscribe result " + unexpected);
+                }
             }
         } catch (IOException ex) {
             reject(topic, ErrorCode.STORAGE_UNAVAILABLE, "storage unavailable");

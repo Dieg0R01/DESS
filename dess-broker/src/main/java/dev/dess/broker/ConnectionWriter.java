@@ -44,10 +44,19 @@ final class ConnectionWriter implements Runnable {
             topic.settle(subscription);
             return;
         }
+        byte[] payload = delivery.payload();
+        if (payload == null) {
+            try {
+                payload = topic.retainedPayload(delivery.filePosition());
+            } catch (IOException ex) {
+                connection.cleanup();
+                return;
+            }
+        }
         topic.handOff(subscription);
         connection.beginWriting();
         try {
-            connection.writeDeliver(topic.name(), delivery.offset(), delivery.payload());
+            connection.writeDeliver(topic.name(), delivery.offset(), payload);
         } catch (IOException ex) {
             connection.cleanup();
             return;
