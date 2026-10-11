@@ -1,6 +1,8 @@
 package dev.dess.broker;
 
 import dev.dess.common.protocol.TopicName;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +33,8 @@ public record BrokerConfig(
         boolean discoveryEnabled,
         int discoveryPort,
         boolean presenceEnabled,
+        String adminBindAddress,
+        int adminPort,
         Path configPath) {
 
     private static final Set<String> LOG_LEVELS = Set.of("SEVERE", "WARNING", "INFO", "FINE");
@@ -101,6 +105,17 @@ public record BrokerConfig(
         }
         if (discoveryPort < 0 || discoveryPort > 65535) {
             throw new IllegalArgumentException("discoveryPort must be between 0 and 65535");
+        }
+        if (adminBindAddress == null || adminBindAddress.isBlank()) {
+            throw new IllegalArgumentException("adminBindAddress is required");
+        }
+        try {
+            InetAddress.getByName(adminBindAddress);
+        } catch (UnknownHostException ex) {
+            throw new IllegalArgumentException("adminBindAddress is not resolvable");
+        }
+        if (adminPort < 0 || adminPort > 65535) {
+            throw new IllegalArgumentException("adminPort must be between 0 and 65535");
         }
         List<String> unique = new ArrayList<>();
         for (String name : topics) {

@@ -141,6 +141,10 @@ final class ConfigWriter {
                 .append("\" presence=\"").append(config.presenceEnabled()).append("\">\n");
         element(builder, "port", config.discoveryPort());
         builder.append("    </discovery>\n");
+        builder.append("    <admin>\n");
+        element(builder, "bindAddress", config.adminBindAddress());
+        element(builder, "port", config.adminPort());
+        builder.append("    </admin>\n");
         builder.append("</broker>\n");
         return builder.toString();
     }

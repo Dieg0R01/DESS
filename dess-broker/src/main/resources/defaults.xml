@@ -33,4 +33,8 @@
     <discovery enabled="true" presence="false">
         <port>55124</port>
     </discovery>
+    <admin>
+        <bindAddress>127.0.0.1</bindAddress>
+        <port>55125</port>
+    </admin>
 </broker>

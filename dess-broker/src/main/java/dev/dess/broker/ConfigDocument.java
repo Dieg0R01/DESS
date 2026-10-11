@@ -32,6 +32,9 @@ public final class ConfigDocument {
     @XmlElement
     Discovery discovery;
 
+    @XmlElement
+    Admin admin;
+
     public ConfigDocument() {
     }
 
@@ -153,6 +156,19 @@ public final class ConfigDocument {
         Integer port;
 
         public Discovery() {
+        }
+    }
+
+    @XmlAccessorType(XmlAccessType.FIELD)
+    public static final class Admin {
+
+        @XmlElement
+        String bindAddress;
+
+        @XmlElement
+        Integer port;
+
+        public Admin() {
         }
     }
 }

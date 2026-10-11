@@ -6,7 +6,9 @@ import jakarta.xml.bind.JAXBException;
 import jakarta.xml.bind.Unmarshaller;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.net.URL;
+import java.net.UnknownHostException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -73,6 +75,8 @@ final class ConfigLoader {
                 resolved.discoveryEnabled,
                 resolved.discoveryPort,
                 resolved.presenceEnabled,
+                resolved.adminBindAddress,
+                resolved.adminPort,
                 file.toAbsolutePath());
         return new Result(config, List.of());
     }
@@ -99,6 +103,9 @@ final class ConfigLoader {
         reject(problems, file, resolved.trustStoreText == null || resolved.trustStoreText.isBlank(), "trustStore is required");
         reject(problems, file, resolved.passwordFileText == null || resolved.passwordFileText.isBlank(), "passwordFile is required");
         reject(problems, file, resolved.discoveryPort < 0 || resolved.discoveryPort > 65535, "discoveryPort must be between 0 and 65535");
+        reject(problems, file, resolved.adminBindAddress == null || resolved.adminBindAddress.isBlank(), "adminBindAddress is required");
+        reject(problems, file, !resolvable(resolved.adminBindAddress), "adminBindAddress is not resolvable");
+        reject(problems, file, resolved.adminPort < 0 || resolved.adminPort > 65535, "adminPort must be between 0 and 65535");
         Set<String> seen = new HashSet<>();
         for (String topic : resolved.topics) {
             if (!TopicName.isValid(topic)) {
@@ -107,6 +114,18 @@ final class ConfigLoader {
             if (!seen.add(topic)) {
                 problems.add(file + ": duplicate topic name " + topic);
             }
+        }
+    }
+
+    private static boolean resolvable(String address) {
+        if (address == null || address.isBlank()) {
+            return true;
+        }
+        try {
+            InetAddress.getByName(address);
+            return true;
+        } catch (UnknownHostException ex) {
+            return false;
         }
     }
 
@@ -128,6 +147,7 @@ final class ConfigLoader {
         ConfigDocument.Logging logging = document.logging;
         ConfigDocument.Security security = document.security;
         ConfigDocument.Discovery discovery = document.discovery;
+        ConfigDocument.Admin admin = document.admin;
         ConfigDocument.Network defaultNetwork = required(DEFAULTS.network, "network");
         ConfigDocument.Engine defaultEngine = required(DEFAULTS.engine, "engine");
         ConfigDocument.Storage defaultStorage = required(DEFAULTS.storage, "storage");
@@ -135,6 +155,7 @@ final class ConfigLoader {
         ConfigDocument.Logging defaultLogging = required(DEFAULTS.logging, "logging");
         ConfigDocument.Security defaultSecurity = required(DEFAULTS.security, "security");
         ConfigDocument.Discovery defaultDiscovery = required(DEFAULTS.discovery, "discovery");
+        ConfigDocument.Admin defaultAdmin = required(DEFAULTS.admin, "admin");
         String logDirectoryText = storage == null ? null : storage.logDirectory;
         if (logDirectoryText == null) {
             logDirectoryText = requiredText(defaultStorage.logDirectory, "logDirectory");
@@ -196,7 +217,11 @@ final class ConfigLoader {
                 absolute(passwordFileText),
                 discoveryEnabled,
                 pick(discovery == null ? null : discovery.port, defaultDiscovery.port, "port"),
-                presenceEnabled);
+                presenceEnabled,
+                admin == null || admin.bindAddress == null || admin.bindAddress.isBlank()
+                        ? requiredText(defaultAdmin.bindAddress, "bindAddress")
+                        : admin.bindAddress,
+                pick(admin == null ? null : admin.port, defaultAdmin.port, "port"));
     }
 
     private static int pick(Integer value, Integer fallback, String setting) {
@@ -346,7 +371,9 @@ final class ConfigLoader {
             Path passwordFile,
             boolean discoveryEnabled,
             int discoveryPort,
-            boolean presenceEnabled) {
+            boolean presenceEnabled,
+            String adminBindAddress,
+            int adminPort) {
     }
 
     private static final class CollectingHandler implements ErrorHandler {

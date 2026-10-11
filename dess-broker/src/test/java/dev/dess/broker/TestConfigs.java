@@ -64,6 +64,8 @@ public final class TestConfigs {
                 false,
                 55124,
                 false,
+                "127.0.0.1",
+                0,
                 null);
     }
 
@@ -120,10 +122,44 @@ public final class TestConfigs {
                     false,
                     55124,
                     false,
+                    "127.0.0.1",
+                    0,
                     null);
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);
         }
+    }
+
+    public static BrokerConfig withAdminPort(int adminPort) {
+        BrokerConfig base = of(0, 32, DEFAULT_MAX_PAYLOAD_BYTES, 120_000);
+        return new BrokerConfig(
+                base.port(),
+                base.maxConnections(),
+                base.maxPayloadBytes(),
+                base.idleTimeoutMillis(),
+                base.maxInFlight(),
+                base.topicQueueCapacity(),
+                base.outboundCapacity(),
+                base.slowConsumerGraceMillis(),
+                base.publishWaitMillis(),
+                base.ackTimeoutMillis(),
+                base.autoCreateTopics(),
+                base.topics(),
+                base.logDirectory(),
+                base.durability(),
+                base.syncIntervalMillis(),
+                base.logLevel(),
+                base.threadKeepAliveMillis(),
+                base.shutdownTimeoutMillis(),
+                base.keyStore(),
+                base.trustStore(),
+                base.passwordFile(),
+                base.discoveryEnabled(),
+                base.discoveryPort(),
+                base.presenceEnabled(),
+                base.adminBindAddress(),
+                adminPort,
+                base.configPath());
     }
 
     public static BrokerConfig discoveryEnabled(int discoveryPort) {
@@ -172,6 +208,8 @@ public final class TestConfigs {
                     discoveryEnabled,
                     discoveryPort,
                     presenceEnabled,
+                    "127.0.0.1",
+                    0,
                     null);
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);

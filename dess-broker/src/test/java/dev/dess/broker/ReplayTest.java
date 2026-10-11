@@ -236,6 +236,8 @@ class ReplayTest {
                 false,
                 55124,
                 false,
+                "127.0.0.1",
+                0,
                 null));
     }
 

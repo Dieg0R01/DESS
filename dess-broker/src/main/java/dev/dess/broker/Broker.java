@@ -6,6 +6,7 @@ import dev.dess.common.protocol.ErrorCode;
 import dev.dess.common.protocol.Frame;
 import dev.dess.common.protocol.FrameCodec;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.LinkedHashMap;
@@ -30,6 +31,7 @@ public final class Broker implements AutoCloseable {
     private final ServerSocket serverSocket;
     private final DiscoveryResponder discovery;
     private final PresenceTracker presence;
+    private final AdminServer admin;
     private final Thread acceptThread;
     private final ExecutorService readers;
     private final ExecutorService writers;
@@ -48,6 +50,7 @@ public final class Broker implements AutoCloseable {
     private final AtomicLong ids = new AtomicLong();
     private volatile boolean running = true;
     private volatile boolean shuttingDown;
+    private volatile BrokerHealth health = BrokerHealth.STARTING;
 
     private Broker(BrokerConfig config) throws IOException {
         this.config = config;
@@ -97,9 +100,27 @@ public final class Broker implements AutoCloseable {
                     }
                     throw ex;
                 }
+                AdminServer adminServer;
+                try {
+                    adminServer = AdminServer.open(config.adminBindAddress(), config.adminPort(), this::health);
+                } catch (IOException ex) {
+                    if (tracker != null) {
+                        tracker.close(config.shutdownTimeoutMillis());
+                    }
+                    if (responder != null) {
+                        responder.close(config.shutdownTimeoutMillis());
+                    }
+                    try {
+                        bound.close();
+                    } catch (IOException suppressed) {
+                        ex.addSuppressed(suppressed);
+                    }
+                    throw ex;
+                }
                 this.serverSocket = bound;
                 this.discovery = responder;
                 this.presence = tracker;
+                this.admin = adminServer;
             } catch (IOException ex) {
                 closeLogs(logs, ex);
                 closeDirectory(directory, ex);
@@ -139,11 +160,14 @@ public final class Broker implements AutoCloseable {
         started.put("version", Integer.toString(FrameCodec.PROTOCOL_VERSION));
         started.put("tls", "true");
         started.put("tcpPort", Integer.toString(serverSocket.getLocalPort()));
+        started.put("adminBindAddress", config.adminBindAddress());
+        started.put("adminPort", Integer.toString(admin.port()));
         if (config.configPath() != null) {
             started.put("configPath", config.configPath().toAbsolutePath().toString());
         }
         Logging.event("dev.dess.broker", "broker.started", started);
         this.acceptThread.start();
+        this.health = BrokerHealth.UP;
     }
 
     private static void closeLogs(TopicLogs logs, IOException failure) {
@@ -187,6 +211,8 @@ public final class Broker implements AutoCloseable {
         effective.put("discoveryEnabled", Boolean.toString(config.discoveryEnabled()));
         effective.put("discoveryPort", Integer.toString(config.discoveryPort()));
         effective.put("presenceEnabled", Boolean.toString(config.presenceEnabled()));
+        effective.put("adminBindAddress", config.adminBindAddress());
+        effective.put("adminPort", Integer.toString(admin.port()));
         effective.put("topics", String.join(",", config.topics()));
         Logging.event("dev.dess.broker", "config.effective", effective);
     }
@@ -240,6 +266,28 @@ public final class Broker implements AutoCloseable {
             throw new IllegalStateException("Broker is not running");
         }
         return serverSocket.getLocalPort();
+    }
+
+    public int adminPort() {
+        if (!running) {
+            throw new IllegalStateException("Broker is not running");
+        }
+        return admin.port();
+    }
+
+    InetSocketAddress adminAddress() {
+        if (!running) {
+            throw new IllegalStateException("Broker is not running");
+        }
+        return admin.address();
+    }
+
+    BrokerHealth health() {
+        return health;
+    }
+
+    void health(BrokerHealth next) {
+        this.health = next;
     }
 
     public int discoveryPort() {
@@ -348,6 +396,7 @@ public final class Broker implements AutoCloseable {
             }
             running = false;
             shuttingDown = true;
+            health = BrokerHealth.STOPPING;
         }
         try {
             serverSocket.close();
@@ -369,6 +418,7 @@ public final class Broker implements AutoCloseable {
         if (presence != null) {
             presence.close(config.shutdownTimeoutMillis());
         }
+        admin.close();
         int inFlightLost = flow.inFlight();
         stopSync();
         IOException storageFailure = null;

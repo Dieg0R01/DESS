@@ -11,6 +11,7 @@
             <xs:element name="logging" type="logging" minOccurs="0"/>
             <xs:element name="security" type="security" minOccurs="0"/>
             <xs:element name="discovery" type="discovery" minOccurs="0"/>
+            <xs:element name="admin" type="admin" minOccurs="0"/>
         </xs:all>
     </xs:complexType>
 
@@ -71,6 +72,13 @@
         </xs:all>
         <xs:attribute name="enabled" type="xs:boolean"/>
         <xs:attribute name="presence" type="xs:boolean"/>
+    </xs:complexType>
+
+    <xs:complexType name="admin">
+        <xs:all>
+            <xs:element name="bindAddress" type="xs:string" minOccurs="0"/>
+            <xs:element name="port" type="xs:int" minOccurs="0"/>
+        </xs:all>
     </xs:complexType>
 
     <xs:simpleType name="durability">

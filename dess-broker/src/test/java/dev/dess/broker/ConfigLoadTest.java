@@ -160,6 +160,8 @@ class ConfigLoadTest {
             assertTrue(config.discoveryEnabled());
             assertEquals(55124, config.discoveryPort());
             assertFalse(config.presenceEnabled());
+            assertEquals("127.0.0.1", config.adminBindAddress());
+            assertEquals(55125, config.adminPort());
             assertEquals(file.toAbsolutePath(), config.configPath());
         } finally {
             delete(directory);
@@ -203,6 +205,8 @@ class ConfigLoadTest {
             assertTrue(text.contains("discoveryEnabled=true"), text);
             assertTrue(text.contains("discoveryPort=55124"), text);
             assertTrue(text.contains("presenceEnabled=false"), text);
+            assertTrue(text.contains("adminBindAddress=127.0.0.1"), text);
+            assertTrue(text.contains("adminPort="), text);
             assertTrue(text.contains("tls=true"), text);
             assertTrue(text.contains("autoCreateTopics=true"), text);
             assertTrue(text.contains("syncIntervalMillis=1000"), text);

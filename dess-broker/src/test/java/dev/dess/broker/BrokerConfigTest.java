@@ -28,6 +28,8 @@ class BrokerConfigTest {
         assertEquals(false, config.discoveryEnabled());
         assertEquals(55124, config.discoveryPort());
         assertEquals(false, config.presenceEnabled());
+        assertEquals("127.0.0.1", config.adminBindAddress());
+        assertEquals(0, config.adminPort());
     }
 
     @Test
@@ -49,6 +51,9 @@ class BrokerConfigTest {
         assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), null, 55124));
         assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), -1));
         assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), 65536));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), 55124, null, 55125));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), 55124, "127.0.0.1", -1));
+        assertThrows(IllegalArgumentException.class, () -> stored(10, 1024, 256, 2_000, 1_000, 5_000, true, List.of(), Path.of("logs"), Durability.ALWAYS, 1_000, "INFO", 1_000, 2_000, TestPki.brokerStore(), TestPki.trustStore(), TestPki.passwordFile(), 55124, "127.0.0.1", 65536));
         assertThrows(IllegalArgumentException.class, () -> full(10, 1024, 256, 1_000, 5_000, List.of("Sales")));
 
         BrokerConfig zeroWait = full(10, 1024, 256, 0, 5_000, List.of());
@@ -100,8 +105,34 @@ class BrokerConfigTest {
             Path trustStore,
             Path passwordFile,
             int discoveryPort) {
+        return stored(inFlight, capacity, outbound, grace, publishWait, ackTimeout, autoCreate, topics,
+                logDirectory, durability, syncIntervalMillis, logLevel, threadKeepAliveMillis, shutdownTimeoutMillis,
+                keyStore, trustStore, passwordFile, discoveryPort, "127.0.0.1", 0);
+    }
+
+    private static BrokerConfig stored(
+            int inFlight,
+            int capacity,
+            int outbound,
+            int grace,
+            int publishWait,
+            int ackTimeout,
+            boolean autoCreate,
+            List<String> topics,
+            Path logDirectory,
+            Durability durability,
+            int syncIntervalMillis,
+            String logLevel,
+            int threadKeepAliveMillis,
+            int shutdownTimeoutMillis,
+            Path keyStore,
+            Path trustStore,
+            Path passwordFile,
+            int discoveryPort,
+            String adminBindAddress,
+            int adminPort) {
         return new BrokerConfig(0, 8, 4, 30_000, inFlight, capacity, outbound, grace, publishWait, ackTimeout, autoCreate, topics,
                 logDirectory, durability, syncIntervalMillis, logLevel, threadKeepAliveMillis, shutdownTimeoutMillis,
-                keyStore, trustStore, passwordFile, false, discoveryPort, false, null);
+                keyStore, trustStore, passwordFile, false, discoveryPort, false, adminBindAddress, adminPort, null);
     }
 }
