@@ -6,6 +6,11 @@ build/
 *.class
 *.jar
 
+# Development key material
+config/pki/
+*.p12
+*.jks
+
 # IDE
 .idea/
 *.iml
