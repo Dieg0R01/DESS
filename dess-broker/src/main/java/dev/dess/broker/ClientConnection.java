@@ -237,6 +237,10 @@ public final class ClientConnection implements Runnable {
         writeFrame(new Frame(Command.DELIVER, FrameCodec.deliverHeader(topic, offset, digest), payload));
     }
 
+    void recordDeliver() {
+        broker.recordOutbound();
+    }
+
     void cleanup() {
         closing = true;
         List<Subscription> owned = List.copyOf(subscriptions.values());

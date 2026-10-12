@@ -35,11 +35,14 @@ final class AdminServer implements AutoCloseable {
 
     private final Supplier<List<TopicSummary>> topics;
 
-    private AdminServer(HttpServer server, ThreadPoolExecutor executor, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics) {
+    private final Supplier<Map<String, Object>> metrics;
+
+    private AdminServer(HttpServer server, ThreadPoolExecutor executor, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics, Supplier<Map<String, Object>> metrics) {
         this.server = server;
         this.executor = executor;
         this.health = health;
         this.topics = topics;
+        this.metrics = metrics;
     }
 
     static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health) throws IOException {
@@ -47,6 +50,10 @@ final class AdminServer implements AutoCloseable {
     }
 
     static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics) throws IOException {
+        return open(bindAddress, port, health, topics, Map::of);
+    }
+
+    static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics, Supplier<Map<String, Object>> metrics) throws IOException {
         InetAddress address;
         try {
             address = InetAddress.getByName(bindAddress);
@@ -72,7 +79,7 @@ final class AdminServer implements AutoCloseable {
                     return thread;
                 },
                 new ThreadPoolExecutor.CallerRunsPolicy());
-        AdminServer admin = new AdminServer(server, executor, health, topics);
+        AdminServer admin = new AdminServer(server, executor, health, topics, metrics);
         server.createContext("/", admin::handle);
         server.setExecutor(executor);
         server.start();
@@ -141,7 +148,7 @@ final class AdminServer implements AutoCloseable {
         }
         if ("/metrics".equals(path)) {
             if ("GET".equals(method)) {
-                return send(exchange, 404, error("NOT_FOUND", "Not found"), null);
+                return send(exchange, 200, metrics.get(), null);
             }
             return send(exchange, 405, error("METHOD_NOT_ALLOWED", "Method not allowed"), "GET");
         }

@@ -60,6 +60,7 @@ final class ConnectionWriter implements Runnable {
         connection.beginWriting();
         try {
             connection.writeDeliver(topic.name(), delivery.offset(), payload, digest);
+            connection.recordDeliver();
         } catch (IOException ex) {
             connection.cleanup();
             return;

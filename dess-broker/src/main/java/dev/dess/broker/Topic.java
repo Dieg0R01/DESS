@@ -30,6 +30,8 @@ final class Topic {
 
     private final TopicLog log;
 
+    private final MetricsRecorder metrics;
+
     private final ReentrantLock lock = new ReentrantLock();
 
     /** Signalled with {@link #lock} held when the oldest ring slot is freed. */
@@ -53,7 +55,7 @@ final class Topic {
     /** Guarded by {@link #lock}. */
     private final Map<Long, Subscription> subscriptions = new HashMap<>();
 
-    Topic(String name, int capacity, int outboundCapacity, FlowControl flow, TopicRegistry registry, Consumer<Subscription> onFull, TopicLog log) {
+    Topic(String name, int capacity, int outboundCapacity, FlowControl flow, TopicRegistry registry, Consumer<Subscription> onFull, TopicLog log, MetricsRecorder metrics) {
         this.name = name;
         this.capacity = capacity;
         this.outboundCapacity = outboundCapacity;
@@ -61,6 +63,7 @@ final class Topic {
         this.registry = registry;
         this.onFull = onFull;
         this.log = log;
+        this.metrics = metrics;
         long recovered = log.nextOffset();
         this.nextOffset = recovered;
         this.baseOffset = recovered;
@@ -183,6 +186,7 @@ final class Topic {
         } finally {
             lock.unlock();
         }
+        metrics.incrementIn();
         for (Subscription subscription : becameFull) {
             onFull.accept(subscription);
         }

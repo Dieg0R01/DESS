@@ -38,6 +38,7 @@ public final class Broker implements AutoCloseable {
     private final ExecutorService refuse;
     private final ScheduledExecutorService flowTimer;
     private final FlowControl flow;
+    private final MetricsRecorder metrics;
     private final TopicRegistry registry;
     private final LogDirectory directory;
     private final TopicLogs logs;
@@ -60,6 +61,7 @@ public final class Broker implements AutoCloseable {
             return thread;
         });
         this.flow = new FlowControl(config.maxInFlight());
+        this.metrics = new MetricsRecorder();
         try {
             TlsMaterial.Result loaded = TlsMaterial.load(config);
             if (!loaded.problems().isEmpty()) {
@@ -75,7 +77,7 @@ public final class Broker implements AutoCloseable {
                 throw ex;
             }
             ConfigWriter writer = new ConfigWriter(config);
-            this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck, logs, writer);
+            this.registry = new TopicRegistry(config.topicQueueCapacity(), config.outboundCapacity(), flow, config.autoCreateTopics(), this::scheduleLagCheck, logs, writer, metrics);
             try {
                 for (String name : List.copyOf(config.topics())) {
                     registry.declare(name);
@@ -102,7 +104,7 @@ public final class Broker implements AutoCloseable {
                 }
                 AdminServer adminServer;
                 try {
-                    adminServer = AdminServer.open(config.adminBindAddress(), config.adminPort(), this::health, registry::summaries);
+                    adminServer = AdminServer.open(config.adminBindAddress(), config.adminPort(), this::health, registry::summaries, this::metricsBody);
                 } catch (IOException ex) {
                     if (tracker != null) {
                         tracker.close(config.shutdownTimeoutMillis());
@@ -168,6 +170,11 @@ public final class Broker implements AutoCloseable {
         Logging.event("dev.dess.broker", "broker.started", started);
         this.acceptThread.start();
         this.health = BrokerHealth.UP;
+        try {
+            flowTimer.scheduleAtFixedRate(metrics::tick, 1, 1, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException ex) {
+            // The timer is already shut down.
+        }
     }
 
     private static void closeLogs(TopicLogs logs, IOException failure) {
@@ -263,6 +270,22 @@ public final class Broker implements AutoCloseable {
 
     List<TopicSummary> summaries() {
         return registry.summaries();
+    }
+
+    MetricsRecorder metrics() {
+        return metrics;
+    }
+
+    void recordOutbound() {
+        metrics.incrementOut();
+    }
+
+    private Map<String, Object> metricsBody() {
+        return metrics.snapshot(
+                connections.size(),
+                flow.inFlight(),
+                TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startedAt),
+                registry.summaries());
     }
 
     public int port() {

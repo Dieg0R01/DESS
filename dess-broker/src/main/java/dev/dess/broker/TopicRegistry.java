@@ -28,6 +28,8 @@ public final class TopicRegistry {
 
     private final ConfigWriter writer;
 
+    private final MetricsRecorder metrics;
+
     private final ConcurrentHashMap<String, Topic> topics = new ConcurrentHashMap<>();
 
     /**
@@ -37,7 +39,7 @@ public final class TopicRegistry {
      */
     private final ConcurrentHashMap<PendingKey, PendingConfirmation> pending = new ConcurrentHashMap<>();
 
-    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, boolean autoCreate, Consumer<Subscription> onFull, TopicLogs logs, ConfigWriter writer) {
+    public TopicRegistry(int topicQueueCapacity, int outboundCapacity, FlowControl flow, boolean autoCreate, Consumer<Subscription> onFull, TopicLogs logs, ConfigWriter writer, MetricsRecorder metrics) {
         this.topicQueueCapacity = topicQueueCapacity;
         this.outboundCapacity = outboundCapacity;
         this.flow = flow;
@@ -45,6 +47,7 @@ public final class TopicRegistry {
         this.onFull = onFull;
         this.logs = logs;
         this.writer = writer;
+        this.metrics = metrics;
         for (TopicLog recovered : logs.recovered()) {
             topics.put(recovered.topic(), topic(recovered));
             Map<String, String> properties = new LinkedHashMap<>();
@@ -155,7 +158,7 @@ public final class TopicRegistry {
     }
 
     private Topic topic(TopicLog log) {
-        return new Topic(log.topic(), topicQueueCapacity, outboundCapacity, flow, this, onFull, log);
+        return new Topic(log.topic(), topicQueueCapacity, outboundCapacity, flow, this, onFull, log, metrics);
     }
 
     public void remove(ClientConnection connection, String name, String reason) {
