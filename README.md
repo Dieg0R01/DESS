@@ -8,7 +8,7 @@ DESS is a small event streaming platform inspired by the architecture of systems
 
 The goal is not to compete with production brokers, but to implement by hand — on top of the JDK — the building blocks that a distributed system relies on: networking over TCP and UDP, multithreading and synchronization, durable storage, XML configuration, TLS encryption, message integrity and a web management interface.
 
-> **Status:** protocol version 4 is implemented: a TLS 1.2+ broker with `produce` and `consume`. Confirmed messages are in the topic logs. The admin API remains the target architecture.
+> **Status:** protocol version 4 is implemented: a TLS 1.2+ broker with `produce` and `consume`. Confirmed messages are in the topic logs. The admin API is served on loopback.
 
 ---
 
@@ -49,7 +49,7 @@ The goal is not to compete with production brokers, but to implement by hand —
 
 ## Architecture
 
-The system is made of three kinds of independent processes that communicate over the network, plus an administrative client. The running broker speaks TLS 1.2 or later, answers UDP discovery, and writes each confirmed message to its topic log. The admin API remains the target architecture.
+The system is made of three kinds of independent processes that communicate over the network, plus an administrative client. The running broker speaks TLS 1.2 or later, answers UDP discovery, writes each confirmed message to its topic log, and serves the admin API on loopback.
 
 ```mermaid
 flowchart LR
@@ -219,6 +219,7 @@ The client sends `PING` and the broker answers `PONG`. A command byte outside 1�
 | `INVALID_OFFSET` | `SUBSCRIBE` asked for an offset greater than the topic's next offset | Open |
 | `UNAUTHORIZED` | `PUBLISH` from a certificate without the producer role. Nothing is persisted or delivered | Open |
 | `INTEGRITY_FAILED` | The digest does not match topic and payload. Nothing is persisted or delivered | Open |
+| `TOPIC_DELETED` | An operator deleted the topic this subscription was on | Open |
 
 When the broker-wide in-flight limit is reached, or a topic's queue is full, a publish waits up to the configured publish wait. If room appears, it is accepted. Otherwise the reply is `BROKER_BUSY` and the connection stays open. A message is in flight from acceptance until it has been written to every subscriber that was present then and is still connected. A subscriber whose outbound buffer stays full beyond the grace period receives `SLOW_CONSUMER` and the connection closes.
 
@@ -243,8 +244,8 @@ dess/
 
 | Module | Main packages | Responsibility |
 |--------|---------------|----------------|
-| `dess-common` | `protocol`, `model`, `security` | Frame encoding/decoding, `Message` and `Topic` value types, SHA-256 hashing utilities. No networking and no threads. |
-| `dess-broker` | `net`, `engine`, `storage`, `config`, `discovery`, `admin` | TCP/TLS acceptor and client handlers; topic registry, queues and dispatchers; append-only log; JAXB configuration; UDP discovery responder. The admin REST API remains target architecture. |
+| `dess-common` | `protocol`, `model`, `security`, `json` | Frame encoding/decoding, `Message` and `Topic` value types, SHA-256 hashing utilities, JSON codec for admin bodies. No networking and no threads. |
+| `dess-broker` | `net`, `engine`, `storage`, `config`, `discovery`, `admin` | TCP/TLS acceptor and client handlers; topic registry, queues and dispatchers; append-only log; JAXB configuration; UDP discovery responder; loopback HTTP admin API. |
 | `dess-client` | `producer`, `consumer`, `discovery` | Reusable `Producer` and `Consumer` classes that handle discovery, connection, hashing and ACKs, plus runnable demo applications. |
 | `dess-admin` | `cli`, `http` | Admin tool built on `java.net.http.HttpClient` to call the REST API. |
 
@@ -277,7 +278,7 @@ Dependency direction is strictly one-way: `dess-broker`, `dess-client` and `dess
 | Concurrency | `java.util.concurrent` |
 | Persistence | `java.nio` file channels, one append-only log per topic |
 | Configuration | Jakarta XML Binding (JAXB) and the JDK schema validator |
-| Admin API | Target architecture. Not served |
+| Admin API | JDK `HttpServer` (plain HTTP, loopback by default) |
 | Admin client | `java.net.http.HttpClient` |
 | Testing | JUnit 5 |
 
@@ -319,6 +320,8 @@ A topic created while the broker is running, and a topic found only in a log fil
 | discoveryEnabled | true |
 | discoveryPort | 55124 |
 | presenceEnabled | false |
+| adminBindAddress | 127.0.0.1 |
+| adminPort | 55125 |
 
 `config/config.xml` is a complete document:
 
@@ -360,6 +363,10 @@ A topic created while the broker is running, and a topic found only in a log fil
     <discovery enabled="true" presence="false">
         <port>55124</port>
     </discovery>
+    <admin>
+        <bindAddress>127.0.0.1</bindAddress>
+        <port>55125</port>
+    </admin>
 </broker>
 ```
 
@@ -396,7 +403,14 @@ java -jar dess-broker/target/dess-broker.jar --config config/config.xml
 Usage: dess-broker [--config PATH]
 ```
 
-`--config` selects the document described above. The default path is `config.xml` in the working directory. `--help` and `-h` print the name, version and usage, then exit 0. An unknown flag, a missing value, or `--config` given twice prints the usage line to standard error and exits 2. A missing file, an invalid document, a missing or unusable key store, trust store or password file, a discovery port that cannot be bound, a log directory that cannot be created or is already in use, or a log damaged in the middle exits 1 and prints the problem without the usage line. The sample file declares `sales` and stores the topic logs in `./data/logs`.
+`--config` selects the document described above. The default path is `config.xml` in the working directory. `--help` and `-h` print the name, version and usage, then exit 0. An unknown flag, a missing value, or `--config` given twice prints the usage line to standard error and exits 2. A missing file, an invalid document, a missing or unusable key store, trust store or password file, a discovery port or admin port that cannot be bound, a log directory that cannot be created or is already in use, or a log damaged in the middle exits 1 and prints the problem without the usage line. An admin bind failure prints `Could not bind admin port` and the port number. The sample file declares `sales` and stores the topic logs in `./data/logs`. The admin API listens on `127.0.0.1:55125` unless `<admin>` says otherwise.
+
+```bash
+curl -sS http://127.0.0.1:55125/health
+java -jar dess-admin/target/dess-admin.jar health
+```
+
+Either command prints `{"status":"UP"}` or `STATUS UP` while the broker is accepting clients.
 
 ### Run a consumer and a producer
 
@@ -414,27 +428,140 @@ Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] 
 
 `--from` is `consume` only. `latest` starts at the next offset, `earliest` replays from offset 0, and `OFFSET` is a decimal integer from 0 up. The default is `latest`. `--resume` is `consume` only: each topic starts at its stored offset plus one, or at `latest` when the offset file has no line for it. After printing a delivery the client rewrites that file, forcing a temporary sibling and moving it into place, and only then sends the acknowledgement. `--resume-file` defaults to `dess-offsets` in the working directory and, by itself, neither reads nor writes. `--resume` together with `--from` exits 2. `produce` rejects `--from`, `--resume` and `--resume-file` with exit 2. `consume` without `--from` and without `--resume` subscribes at `latest` and does not write an offset file.
 
-An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT`, `SLOW_CONSUMER`, `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED` and `INTEGRITY_FAILED`, prints one line containing the code and exits 1. An `ACK_TIMEOUT` line also contains the expected and received counts. The broker leaves the connection open for `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED` and `INTEGRITY_FAILED`. A `DELIVER` whose digest does not match prints `INTEGRITY_FAILED` with the topic and offset, does not print the payload, and exits 1.
+An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT`, `SLOW_CONSUMER`, `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED`, `INTEGRITY_FAILED` and `TOPIC_DELETED`, prints one line containing the code and exits 1. `TOPIC_DELETED` is fatal only when no subscription remains; otherwise the consumer drops that topic and continues. An `ACK_TIMEOUT` line also contains the expected and received counts. The broker leaves the connection open for `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED`, `INTEGRITY_FAILED` and `TOPIC_DELETED`. A `DELIVER` whose digest does not match prints `INTEGRITY_FAILED` with the topic and offset, does not print the payload, and exits 1.
 
 Without `--host` the client discovers the broker on UDP port 55124. `--host` skips discovery and `--port` then defaults to 55123. `--port` without `--host` exits 2. `--identity` defaults to `./config/pki/producer.p12` for `produce` and `./config/pki/consumer.p12` for `consume`. `--trust-store` defaults to `./config/pki/trust.p12` and `--password-file` to `./config/pki/password`. A handshake failure prints one line naming `EXPIRED`, `UNTRUSTED`, `NOT_BROKER` or `PROTOCOL_VERSION` and exits 1. `--presence-ms N` announces the certificate `CN` every N milliseconds when the broker has presence enabled.
 
 ### Query the admin API
 
-The admin API is part of the target architecture and is not served yet.
+Plain HTTP on the configured bind, `127.0.0.1:55125` by default. There is no TLS and no authentication on this socket.
+
+```bash
+curl -sS http://127.0.0.1:55125/health
+curl -sS http://127.0.0.1:55125/topics
+curl -sS http://127.0.0.1:55125/metrics
+java -jar dess-admin/target/dess-admin.jar topics list
+java -jar dess-admin/target/dess-admin.jar --json topics create demo
+java -jar dess-admin/target/dess-admin.jar topics delete demo
+java -jar dess-admin/target/dess-admin.jar metrics
+java -jar dess-admin/target/dess-admin.jar health
+```
+
+```text
+Usage: dess-admin [--url URL] [--json] [--log-level LEVEL] topics list|create NAME|delete NAME|metrics|health
+```
+
+`--url` is the origin only and defaults to `http://127.0.0.1:55125`. `--json` prints the response body. Without it, stdout is a table. HTTP 2xx exits 0. HTTP 400 or higher, a connect failure, or a body that is not the documented JSON exits 1 and prints the status (or `UNREACHABLE`) plus the error `message` when the body has that shape. Unknown commands, a missing name, or `--url` without a value exit 2. `--help` and `-h` print the name, version and usage, then exit 0.
 
 ---
 
 ## Admin API
 
-The broker exposes a small resource-oriented HTTP API for management and monitoring, bound to the loopback interface by default. The `dess-admin` command-line tool wraps the same operations.
+The broker serves a small resource-oriented HTTP API on the configured bind address and port. The default configuration is loopback only (`127.0.0.1:55125`). JSON bodies are UTF-8. Successful JSON responses use `Content-Type: application/json; charset=UTF-8`. While the broker is starting or stopping, every path returns `503` with `{"status":"UNAVAILABLE"}`. The `dess-admin` command-line tool calls the same endpoints.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/topics` | List topics with their retained messages, subscribers and queue depth. |
-| `POST` | `/topics` | Create a topic. Body: `{"name": "sensor-temperature"}`. |
-| `DELETE` | `/topics/{name}` | Delete a topic; its subscribers are notified and its log is removed. |
-| `GET` | `/metrics` | Message rates, connections, threads, memory, in-flight messages and uptime. |
-| `GET` | `/health` | Whether the broker is currently accepting client connections. |
+### `GET /topics`
+
+Lists every live topic, lexicographic by name. `topics` is present even when empty.
+
+```bash
+curl -sS http://127.0.0.1:55125/topics
+```
+
+```json
+{
+  "topics": [
+    {
+      "name": "sales",
+      "retainedCount": 12,
+      "subscriberCount": 2,
+      "queueDepth": 3
+    }
+  ]
+}
+```
+
+### `POST /topics`
+
+Creates a topic through the same catalogue as client traffic. The body is a JSON object whose only required member is `name`. Extra members are ignored. A body larger than 4096 bytes is `400`.
+
+```bash
+curl -sS -D - -H 'Content-Type: application/json' \
+  -d '{"name":"sensor-temperature"}' http://127.0.0.1:55125/topics
+```
+
+`201` includes `Location: /topics/sensor-temperature`:
+
+```json
+{
+  "name": "sensor-temperature",
+  "retainedCount": 0,
+  "subscriberCount": 0,
+  "queueDepth": 0
+}
+```
+
+An invalid name is `400` and the message quotes `[a-z0-9][a-z0-9._-]{0,63}`. Malformed JSON or a missing `name` is `400`. A name that already exists is `409`.
+
+### `DELETE /topics/{name}`
+
+Removes the topic, notifies subscribers with `ERROR TOPIC_DELETED` (the reason is the topic name), deletes `{name}.log` and drops the name from the configuration document. The client connection stays open.
+
+```bash
+curl -sS -D - -X DELETE http://127.0.0.1:55125/topics/ops
+```
+
+`204` has an empty body. An invalid `{name}` is `400`. A valid name that is not in the catalogue is `404`.
+
+### `GET /metrics`
+
+Rates are averages over the last 10 seconds. `heapMaxBytes` is JSON `null` when the JVM reports no heap maximum.
+
+```bash
+curl -sS http://127.0.0.1:55125/metrics
+```
+
+```json
+{
+  "takenAt": "2026-10-11T18:00:00Z",
+  "messagesInPerSecond": 1000.0,
+  "messagesOutPerSecond": 980.0,
+  "activeConnections": 4,
+  "activeThreads": 12,
+  "heapUsedBytes": 12345678,
+  "heapMaxBytes": 268435456,
+  "inFlight": 7,
+  "uptimeSeconds": 42,
+  "topics": [
+    {"name": "sales", "queueDepth": 3}
+  ]
+}
+```
+
+### `GET /health`
+
+```bash
+curl -sS http://127.0.0.1:55125/health
+```
+
+| Health | Status | Body |
+|--------|--------|------|
+| Accepting clients | `200` | `{"status":"UP"}` |
+| Starting or stopping | `503` | `{"status":"UNAVAILABLE"}` |
+
+### Errors
+
+Unless a row above says the body is empty, an error body is:
+
+```json
+{
+  "error": "INVALID_TOPIC_NAME",
+  "message": "Topic names match [a-z0-9][a-z0-9._-]{0,63}"
+}
+```
+
+`error` is a short machine token (`INVALID_TOPIC_NAME`, `TOPIC_EXISTS`, `UNKNOWN_TOPIC`, `MALFORMED_BODY`, `METHOD_NOT_ALLOWED`, `NOT_FOUND`, `UNAVAILABLE`). `message` is human-readable and never empty.
+
+A known path with the wrong method is `405` and `Allow` lists the methods that path accepts (`GET, POST` on `/topics`, `DELETE` on `/topics/{name}`, `GET` on `/metrics` and `/health`). An unknown path is `404` with `NOT_FOUND`. Every finished request logs `admin.request` with `method`, `path`, `status` and `durationMs`.
 
 ---
 
