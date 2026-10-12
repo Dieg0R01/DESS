@@ -24,8 +24,12 @@ final class ClientRequest {
     private final Path identity;
     private final Path trustStore;
     private final Path passwordFile;
+    private final int payloadBytes;
+    private final int producers;
+    private final int consumers;
+    private final int messages;
 
-    private ClientRequest(String command, List<String> topics, String message, String host, int port, int discoveryPort, int presenceMs, int heartbeatMs, String logLevel, ConfirmationMode confirm, StartPosition from, boolean resume, Path resumeFile, Path identity, Path trustStore, Path passwordFile) {
+    private ClientRequest(String command, List<String> topics, String message, String host, int port, int discoveryPort, int presenceMs, int heartbeatMs, String logLevel, ConfirmationMode confirm, StartPosition from, boolean resume, Path resumeFile, Path identity, Path trustStore, Path passwordFile, int payloadBytes, int producers, int consumers, int messages) {
         this.command = command;
         this.topics = topics;
         this.message = message;
@@ -42,6 +46,10 @@ final class ClientRequest {
         this.identity = identity;
         this.trustStore = trustStore;
         this.passwordFile = passwordFile;
+        this.payloadBytes = payloadBytes;
+        this.producers = producers;
+        this.consumers = consumers;
+        this.messages = messages;
     }
 
     static ClientRequest parse(String[] args) {
@@ -49,7 +57,7 @@ final class ClientRequest {
             return null;
         }
         String command = args[0];
-        if (!"produce".equals(command) && !"consume".equals(command)) {
+        if (!"produce".equals(command) && !"consume".equals(command) && !"bench".equals(command)) {
             return null;
         }
         List<String> topics = new ArrayList<>();
@@ -69,6 +77,10 @@ final class ClientRequest {
         Path identity = null;
         Path trustStore = null;
         Path passwordFile = null;
+        Integer payloadBytes = null;
+        Integer producers = null;
+        Integer consumers = null;
+        Integer messages = null;
         for (int index = 1; index < args.length; index++) {
             switch (args[index]) {
                 case "--topic" -> {
@@ -230,12 +242,55 @@ final class ClientRequest {
                     logLevel = value;
                     index++;
                 }
+                case "--payload-bytes" -> {
+                    if (!"bench".equals(command) || payloadBytes != null) {
+                        return null;
+                    }
+                    payloadBytes = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                    if (payloadBytes == null) {
+                        return null;
+                    }
+                    index++;
+                }
+                case "--producers" -> {
+                    if (!"bench".equals(command) || producers != null) {
+                        return null;
+                    }
+                    producers = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                    if (producers == null) {
+                        return null;
+                    }
+                    index++;
+                }
+                case "--consumers" -> {
+                    if (!"bench".equals(command) || consumers != null) {
+                        return null;
+                    }
+                    consumers = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                    if (consumers == null) {
+                        return null;
+                    }
+                    index++;
+                }
+                case "--messages" -> {
+                    if (!"bench".equals(command) || messages != null) {
+                        return null;
+                    }
+                    messages = integer(value(args, index + 1), 1, Integer.MAX_VALUE);
+                    if (messages == null) {
+                        return null;
+                    }
+                    index++;
+                }
                 default -> {
                     return null;
                 }
             }
         }
-        if (topics.isEmpty() || ("produce".equals(command) && topics.size() != 1)) {
+        if (topics.isEmpty() || (("produce".equals(command) || "bench".equals(command)) && topics.size() != 1)) {
+            return null;
+        }
+        if ("bench".equals(command) && messages == null) {
             return null;
         }
         if (resume && from != null) {
@@ -252,10 +307,14 @@ final class ClientRequest {
         ConfirmationMode resolvedConfirm = confirm == null ? ConfirmationMode.BROKER : confirm;
         Path resolvedIdentity = identity != null
                 ? identity
-                : Path.of("produce".equals(command) ? "./config/pki/producer.p12" : "./config/pki/consumer.p12");
+                : Path.of("consume".equals(command) ? "./config/pki/consumer.p12" : "./config/pki/producer.p12");
         Path resolvedTrust = trustStore != null ? trustStore : Path.of("./config/pki/trust.p12");
         Path resolvedPassword = passwordFile != null ? passwordFile : Path.of("./config/pki/password");
-        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedDiscovery, resolvedPresence, resolvedHeartbeat, resolvedLevel, resolvedConfirm, from, resume, resumeFile, resolvedIdentity, resolvedTrust, resolvedPassword);
+        int resolvedPayload = payloadBytes == null ? 1024 : payloadBytes;
+        int resolvedProducers = producers == null ? 1 : producers;
+        int resolvedConsumers = consumers == null ? 1 : consumers;
+        int resolvedMessages = messages == null ? 0 : messages;
+        return new ClientRequest(command, List.copyOf(topics), message, host, resolvedPort, resolvedDiscovery, resolvedPresence, resolvedHeartbeat, resolvedLevel, resolvedConfirm, from, resume, resumeFile, resolvedIdentity, resolvedTrust, resolvedPassword, resolvedPayload, resolvedProducers, resolvedConsumers, resolvedMessages);
     }
 
     String command() {
@@ -320,6 +379,30 @@ final class ClientRequest {
 
     Path passwordFile() {
         return passwordFile;
+    }
+
+    Path consumerIdentity() {
+        Path parent = identity.getParent();
+        if (parent != null) {
+            return parent.resolve("consumer.p12");
+        }
+        return Path.of("./config/pki/consumer.p12");
+    }
+
+    int payloadBytes() {
+        return payloadBytes;
+    }
+
+    int producers() {
+        return producers;
+    }
+
+    int consumers() {
+        return consumers;
+    }
+
+    int messages() {
+        return messages;
     }
 
     private static StartPosition start(String value) {

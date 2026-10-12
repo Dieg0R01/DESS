@@ -7,7 +7,7 @@ import java.io.PrintStream;
 
 public final class ClientMain {
 
-    static final String USAGE = "Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--discovery-port N] [--presence-ms N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]";
+    static final String USAGE = "Usage: dess-client produce|consume|bench --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--payload-bytes N] [--producers N] [--consumers N] [--messages N] [--host HOST] [--port N] [--discovery-port N] [--presence-ms N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]";
 
     private ClientMain() {
     }
@@ -23,9 +23,11 @@ public final class ClientMain {
             return Help.execute("dess-client", ClientMain.class, safeArgs, out, err, USAGE);
         }
         Logging.configure(request.logLevel());
-        if ("consume".equals(request.command())) {
-            return ConsumeCommand.execute(request, out, err);
-        }
-        return ProduceCommand.execute(request, in, err);
+        return switch (request.command()) {
+            case "consume" -> ConsumeCommand.execute(request, out, err);
+            case "produce" -> ProduceCommand.execute(request, in, err);
+            case "bench" -> BenchCommand.execute(request, out, err);
+            default -> throw new IllegalStateException("Unhandled command " + request.command());
+        };
     }
 }
