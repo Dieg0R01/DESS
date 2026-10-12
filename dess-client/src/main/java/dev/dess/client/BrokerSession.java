@@ -67,7 +67,12 @@ public final class BrokerSession implements AutoCloseable {
     }
 
     public void publish(String topic, byte[] payload, ConfirmationMode mode) throws IOException {
-        write(new Frame(Command.PUBLISH, FrameCodec.publishHeader(topic, mode, Digests.of(topic, payload == null ? new byte[0] : payload)), payload));
+        byte[] body = payload == null ? new byte[0] : payload;
+        publish(topic, body, mode, Digests.of(topic, body));
+    }
+
+    void publish(String topic, byte[] payload, ConfirmationMode mode, byte[] digest) throws IOException {
+        write(new Frame(Command.PUBLISH, FrameCodec.publishHeader(topic, mode, digest), payload));
     }
 
     public void acknowledge(String topic, long offset) throws IOException {
