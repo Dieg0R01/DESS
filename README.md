@@ -616,15 +616,15 @@ A known path with the wrong method is `405` and `Allow` lists the methods that p
 
 ## Performance
 
-`dess-client bench` records these rows: 1 KiB payloads, TLS, durability `ALWAYS`, loopback, consumer count equal to producer count. Throughput is unique deliveries (producers × messages) per wall second. Latency is publish to the first matching `DELIVER`. Hardware is the `os`, `processors` and `maxMemoryBytes` lines from that run.
+`dess-client bench` records these rows: 1 KiB payloads, TLS, durability `ALWAYS`, loopback, consumer count equal to producer count, 1000 messages per producer. Throughput is unique deliveries (producers × messages) per wall second. Latency is publish to the first matching `DELIVER`. Each cell is the median of three runs; those three throughputs stayed within ±15%. Hardware is `Mac OS X 26.6.2 aarch64`, 10 processors, `maxMemoryBytes` 4294967296 (4 GiB).
 
-| Producers | Consumers | Payload | Durability | Transport | messages/s | p50 (ms) | p99 (ms) | Hardware |
-|-----------|-----------|---------|------------|-----------|------------|----------|----------|----------|
-| 1 | 1 | 1 KiB | ALWAYS | TLS, loopback | — | — | — | — |
-| 4 | 4 | 1 KiB | ALWAYS | TLS, loopback | — | — | — | — |
-| 16 | 16 | 1 KiB | ALWAYS | TLS, loopback | — | — | — | — |
+| Producers | Consumers | Payload | Durability | Transport | messages/s | p50 (ms) | p99 (ms) |
+|-----------|-----------|---------|------------|-----------|------------|----------|----------|
+| 1 | 1 | 1 KiB | ALWAYS | TLS, loopback | 252 | 4.0 | 5.4 |
+| 4 | 4 | 1 KiB | ALWAYS | TLS, loopback | 259 | 15.1 | 19.1 |
+| 16 | 16 | 1 KiB | ALWAYS | TLS, loopback | 254 | 63.4 | 69.0 |
 
-The documented goal is 5,000 messages/s. A single broker that forces every log record under `ALWAYS` and wraps every session in TLS typically lands below that rate; the table is the measured limit, not a hidden shortfall.
+The documented goal is 5,000 messages/s. These runs measured about 250 messages/s, about twenty times below that goal. Throughput stayed flat from 1 to 16 producers because each acknowledgement waits for an `ALWAYS` fsync on a single broker over TLS. Latency grows with producer count as those forced writes queue. A `loadWarning true` line is printed when the one-minute OS load average exceeds the processor count.
 
 ---
 

@@ -86,10 +86,10 @@ final class BenchCommand {
                 worker.start();
                 workers.add(worker);
             }
-            if (!unique.await(60, TimeUnit.SECONDS) || failed.get()) {
+            if (!unique.await(10, TimeUnit.MINUTES) || failed.get()) {
                 return fail(err, failed.get() ? "bench failed" : "bench timed out");
             }
-            drained.await(10, TimeUnit.SECONDS);
+            drained.await(1, TimeUnit.MINUTES);
             double seconds = (System.nanoTime() - wallStart) / 1_000_000_000.0;
             if (seconds <= 0) {
                 seconds = Double.MIN_VALUE;
