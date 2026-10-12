@@ -15,6 +15,7 @@
 
     <properties>
         <dess.stress.runs>1</dess.stress.runs>
+        <dess.fault.runs>1</dess.fault.runs>
     </properties>
 
     <dependencies>
@@ -69,6 +70,7 @@
                 <configuration>
                     <systemPropertyVariables>
                         <dess.stress.runs>${dess.stress.runs}</dess.stress.runs>
+                        <dess.fault.runs>${dess.fault.runs}</dess.fault.runs>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
