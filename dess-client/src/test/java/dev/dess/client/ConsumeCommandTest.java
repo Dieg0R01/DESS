@@ -78,6 +78,34 @@ class ConsumeCommandTest {
     }
 
     @Test
+    void topicDeletedExitsOneWhenItWasTheLastSubscription() throws Exception {
+        assertBrokerErrorExitsOne("TOPIC_DELETED");
+    }
+
+    @Test
+    void topicDeletedDropsOneTopicAndKeepsTheOthers() throws Exception {
+        Path error = Files.createTempFile("dess-consume-err", ".txt");
+        try (ScriptedBroker broker = ScriptedBroker.start()) {
+            Process process = CliProcess.start(null, null, error, List.of(
+                    "consume", "--topic", "ops", "--topic", "sales",
+                    "--port", Integer.toString(broker.port()), "--heartbeat-ms", "200"));
+            Stdout stdout = new Stdout(process);
+            try {
+                assertTrue(broker.await(Command.SUBSCRIBE, "ops", Duration.ofSeconds(2)));
+                assertTrue(broker.await(Command.SUBSCRIBE, "sales", Duration.ofSeconds(2)));
+                broker.error("TOPIC_DELETED", "ops");
+                broker.deliver("sales", "kept".getBytes(StandardCharsets.UTF_8));
+                String text = stdout.await("sales kept");
+                assertTrue(text.contains("sales kept"), text);
+                assertTrue(process.isAlive(), Files.readString(error));
+            } finally {
+                stop(process);
+                Files.deleteIfExists(error);
+            }
+        }
+    }
+
+    @Test
     void interruptUnsubscribesAndExitsZero() throws Exception {
         Path output = Files.createTempFile("dess-consume-out", ".txt");
         Path error = Files.createTempFile("dess-consume-err", ".txt");

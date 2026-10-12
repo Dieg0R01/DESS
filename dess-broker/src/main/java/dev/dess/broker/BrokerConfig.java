@@ -134,4 +134,8 @@ public record BrokerConfig(
             topics.add(name);
         }
     }
+
+    void forget(String name) {
+        topics.remove(name);
+    }
 }

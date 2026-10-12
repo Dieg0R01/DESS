@@ -23,6 +23,11 @@ final class ConnectionWriter implements Runnable {
                     connection.failSlow();
                     return;
                 }
+                Frame error = connection.pollError();
+                if (error != null) {
+                    writeError(error);
+                    continue;
+                }
                 Subscription subscription = connection.pollReady();
                 if (subscription != null) {
                     deliver(subscription);
@@ -30,6 +35,17 @@ final class ConnectionWriter implements Runnable {
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private void writeError(Frame error) {
+        connection.beginWriting();
+        try {
+            connection.writeOutbound(error);
+        } catch (IOException ex) {
+            connection.cleanup();
+        } finally {
+            connection.endWriting();
         }
     }
 

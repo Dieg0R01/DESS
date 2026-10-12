@@ -62,6 +62,10 @@ final class ScriptedBroker implements AutoCloseable {
         acknowledgementTimeout = new int[] {expected, received};
     }
 
+    void error(String code, String reason) throws IOException {
+        write(new Frame(Command.ERROR, FrameCodec.errorHeader(code, reason), new byte[0]));
+    }
+
     void deliver(String topic, byte[] payload) throws IOException {
         deliver(topic, nextOffset, payload);
     }

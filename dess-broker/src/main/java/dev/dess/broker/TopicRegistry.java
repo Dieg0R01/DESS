@@ -1,7 +1,9 @@
 package dev.dess.broker;
 
 import dev.dess.common.logging.Logging;
+import dev.dess.common.protocol.ErrorCode;
 import dev.dess.common.protocol.StartPosition;
+import dev.dess.common.protocol.TopicName;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -86,6 +88,9 @@ public final class TopicRegistry {
             case INVALID_OFFSET -> {
                 return SubscribeResult.INVALID_OFFSET;
             }
+            case SEALED -> {
+                return SubscribeResult.UNKNOWN;
+            }
             default -> {
                 Topic.Membership unexpected = membership;
                 throw new IllegalStateException("Unhandled membership " + unexpected);
@@ -120,6 +125,66 @@ public final class TopicRegistry {
             return Set.of();
         }
         return topic.subscribers();
+    }
+
+    Created create(String name) throws IOException {
+        if (!TopicName.isValid(name)) {
+            return Created.invalid();
+        }
+        writer.lock();
+        try {
+            if (topics.containsKey(name)) {
+                return Created.exists();
+            }
+            TopicLog log = logs.openOrCreate(name);
+            Topic created = topic(log);
+            topics.put(name, created);
+            try {
+                writer.remember(name);
+            } catch (IOException ex) {
+                topics.remove(name, created);
+                throw ex;
+            }
+            Map<String, String> properties = new LinkedHashMap<>();
+            properties.put("topic", name);
+            properties.put("source", "ADMIN");
+            event("topic.created", properties);
+            return Created.created(created.summary());
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    DeleteStatus delete(String name) throws IOException {
+        if (!TopicName.isValid(name)) {
+            return DeleteStatus.INVALID;
+        }
+        writer.lock();
+        try {
+            Topic topic = topics.remove(name);
+            if (topic == null) {
+                return DeleteStatus.NOT_FOUND;
+            }
+            List<ClientConnection> subscribers = topic.seal();
+            pending.keySet().removeIf(key -> key.topic().equals(name));
+            for (ClientConnection connection : subscribers) {
+                connection.enqueueError(ErrorCode.TOPIC_DELETED, name);
+                Map<String, String> removed = new LinkedHashMap<>();
+                removed.put("clientId", Long.toString(connection.id()));
+                removed.put("topic", name);
+                removed.put("reason", "DELETED");
+                event("subscription.removed", removed);
+            }
+            logs.delete(name);
+            writer.forget(name);
+            Map<String, String> properties = new LinkedHashMap<>();
+            properties.put("topic", name);
+            properties.put("subscribersNotified", Integer.toString(subscribers.size()));
+            event("topic.deleted", properties);
+            return DeleteStatus.DELETED;
+        } finally {
+            writer.unlock();
+        }
     }
 
     private Topic resolve(String name, boolean create, String source) throws IOException {
@@ -220,6 +285,33 @@ public final class TopicRegistry {
         SUBSCRIBED,
         UNKNOWN,
         INVALID_OFFSET
+    }
+
+    enum CreateStatus {
+        CREATED,
+        EXISTS,
+        INVALID
+    }
+
+    enum DeleteStatus {
+        DELETED,
+        NOT_FOUND,
+        INVALID
+    }
+
+    record Created(CreateStatus status, TopicSummary summary) {
+
+        static Created created(TopicSummary summary) {
+            return new Created(CreateStatus.CREATED, summary);
+        }
+
+        static Created exists() {
+            return new Created(CreateStatus.EXISTS, null);
+        }
+
+        static Created invalid() {
+            return new Created(CreateStatus.INVALID, null);
+        }
     }
 
     private record PendingKey(String topic, long offset) {

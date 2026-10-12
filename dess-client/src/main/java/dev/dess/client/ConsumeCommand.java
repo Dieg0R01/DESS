@@ -86,7 +86,16 @@ final class ConsumeCommand {
             while (true) {
                 Frame frame = session.readFrame();
                 if (frame.command() == Command.ERROR) {
-                    return fail(session, hook, err, errorCode(frame));
+                    String code = errorCode(frame);
+                    if ("TOPIC_DELETED".equals(code)) {
+                        String topic = errorReason(frame);
+                        synchronized (subscribed) {
+                            if (subscribed.remove(topic) && !subscribed.isEmpty()) {
+                                continue;
+                            }
+                        }
+                    }
+                    return fail(session, hook, err, code);
                 }
                 if (frame.command() == Command.DELIVER) {
                     Delivery delivery = FrameCodec.delivery(frame.header());
@@ -163,6 +172,14 @@ final class ConsumeCommand {
             return FrameCodec.errorCode(frame.header());
         } catch (FrameException ex) {
             return "ERROR";
+        }
+    }
+
+    private static String errorReason(Frame frame) {
+        try {
+            return FrameCodec.errorReason(frame.header());
+        } catch (FrameException ex) {
+            return "";
         }
     }
 

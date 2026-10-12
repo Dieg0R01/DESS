@@ -55,6 +55,9 @@ final class Topic {
     /** Guarded by {@link #lock}. */
     private final Map<Long, Subscription> subscriptions = new HashMap<>();
 
+    /** Guarded by {@link #lock}. Once true, append and add refuse new work. */
+    private boolean sealed;
+
     Topic(String name, int capacity, int outboundCapacity, FlowControl flow, TopicRegistry registry, Consumer<Subscription> onFull, TopicLog log, MetricsRecorder metrics) {
         this.name = name;
         this.capacity = capacity;
@@ -92,9 +95,32 @@ final class Topic {
         }
     }
 
+    List<ClientConnection> seal() {
+        lock.lock();
+        try {
+            sealed = true;
+            ArrayList<ClientConnection> snapshot = new ArrayList<>(subscriptions.size());
+            for (Subscription subscription : List.copyOf(subscriptions.values())) {
+                subscriptions.remove(subscription.connection().id());
+                subscription.connection().forget(name);
+                subscription.deactivate();
+                releaseOwed(subscription);
+                snapshot.add(subscription.connection());
+            }
+            notFull.signalAll();
+            committed.signalAll();
+            return snapshot;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     Membership add(ClientConnection connection, StartPosition start) {
         lock.lock();
         try {
+            if (sealed) {
+                return Membership.SEALED;
+            }
             if (connection.isClosing() || subscriptions.containsKey(connection.id())) {
                 return Membership.UNCHANGED;
             }
@@ -141,6 +167,9 @@ final class Topic {
         boolean waited = false;
         lock.lock();
         try {
+            if (sealed) {
+                return AppendResult.unknownTopic();
+            }
             while (ring != null && nextOffset + inflight - baseOffset == capacity) {
                 waited = true;
                 long waiting = deadlineNanos - System.nanoTime();
@@ -148,6 +177,12 @@ final class Topic {
                     return AppendResult.rejected();
                 }
                 notFull.awaitNanos(waiting);
+                if (sealed) {
+                    return AppendResult.unknownTopic();
+                }
+            }
+            if (sealed) {
+                return AppendResult.unknownTopic();
             }
             if (ring == null) {
                 ring = new Entry[capacity];
@@ -426,6 +461,8 @@ final class Topic {
 
         private final boolean storageFailed;
 
+        private final boolean unknown;
+
         private final long timestamp;
 
         private AppendResult(long offset, boolean waited, long timestamp) {
@@ -433,23 +470,29 @@ final class Topic {
             this.accepted = true;
             this.waited = waited;
             this.storageFailed = false;
+            this.unknown = false;
             this.timestamp = timestamp;
         }
 
-        private AppendResult(boolean waited, boolean storageFailed) {
+        private AppendResult(boolean waited, boolean storageFailed, boolean unknown) {
             this.offset = -1;
             this.accepted = false;
             this.waited = waited;
             this.storageFailed = storageFailed;
+            this.unknown = unknown;
             this.timestamp = 0;
         }
 
         static AppendResult rejected() {
-            return new AppendResult(true, false);
+            return new AppendResult(true, false, false);
         }
 
         static AppendResult storage(boolean waited) {
-            return new AppendResult(waited, true);
+            return new AppendResult(waited, true, false);
+        }
+
+        static AppendResult unknownTopic() {
+            return new AppendResult(false, false, true);
         }
 
         boolean accepted() {
@@ -458,6 +501,10 @@ final class Topic {
 
         boolean storageFailed() {
             return storageFailed;
+        }
+
+        boolean unknown() {
+            return unknown;
         }
 
         long offset() {
@@ -510,7 +557,8 @@ final class Topic {
     enum Membership {
         ADDED,
         UNCHANGED,
-        INVALID_OFFSET
+        INVALID_OFFSET,
+        SEALED
     }
 
     private static final class Entry {

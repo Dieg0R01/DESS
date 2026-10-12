@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -62,6 +63,8 @@ public final class ClientConnection implements Runnable {
     private final Map<String, Subscription> subscriptions = new ConcurrentHashMap<>();
 
     private final LinkedBlockingQueue<Subscription> ready = new LinkedBlockingQueue<>();
+
+    private final ConcurrentLinkedQueue<Frame> outboundErrors = new ConcurrentLinkedQueue<>();
 
     private final ConnectionWriter writer = new ConnectionWriter(this);
 
@@ -123,6 +126,22 @@ public final class ClientConnection implements Runnable {
 
     void enqueue(Subscription subscription) {
         ready.offer(subscription);
+    }
+
+    void enqueueError(ErrorCode code, String reason) {
+        outboundErrors.offer(new Frame(Command.ERROR, FrameCodec.errorHeader(code.name(), reason), new byte[0]));
+        for (Subscription subscription : subscriptions.values()) {
+            ready.offer(subscription);
+            return;
+        }
+    }
+
+    Frame pollError() {
+        return outboundErrors.poll();
+    }
+
+    void writeOutbound(Frame frame) throws IOException {
+        writeFrame(frame);
     }
 
     Subscription pollReady() throws InterruptedException {
@@ -489,6 +508,11 @@ public final class ClientConnection implements Runnable {
         if (accepted.storageFailed()) {
             flow.release();
             reject(topic, ErrorCode.STORAGE_UNAVAILABLE, "storage unavailable");
+            return;
+        }
+        if (accepted.unknown()) {
+            flow.release();
+            reject(topic, ErrorCode.UNKNOWN_TOPIC, "unknown topic");
             return;
         }
         if (!accepted.accepted()) {

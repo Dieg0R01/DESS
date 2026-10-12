@@ -57,6 +57,17 @@ final class ConfigWriter {
         }
     }
 
+    void forget(String name) throws IOException {
+        lock.lock();
+        try {
+            persisted.remove(name);
+            config.forget(name);
+            rewrite();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     void includeRecovered(Collection<String> names) throws IOException {
         lock.lock();
         try {

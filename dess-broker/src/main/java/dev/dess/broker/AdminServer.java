@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer;
 import dev.dess.common.json.Json;
 import dev.dess.common.logging.Logging;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -27,6 +28,10 @@ final class AdminServer implements AutoCloseable {
 
     private static final int QUEUE_CAPACITY = 16;
 
+    private static final int POST_MAX_BYTES = 4096;
+
+    private static final String TOPIC_NAME_RULE = "[a-z0-9][a-z0-9._-]{0,63}";
+
     private final HttpServer server;
 
     private final ThreadPoolExecutor executor;
@@ -37,12 +42,15 @@ final class AdminServer implements AutoCloseable {
 
     private final Supplier<Map<String, Object>> metrics;
 
-    private AdminServer(HttpServer server, ThreadPoolExecutor executor, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics, Supplier<Map<String, Object>> metrics) {
+    private final TopicRegistry registry;
+
+    private AdminServer(HttpServer server, ThreadPoolExecutor executor, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics, Supplier<Map<String, Object>> metrics, TopicRegistry registry) {
         this.server = server;
         this.executor = executor;
         this.health = health;
         this.topics = topics;
         this.metrics = metrics;
+        this.registry = registry;
     }
 
     static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health) throws IOException {
@@ -54,6 +62,10 @@ final class AdminServer implements AutoCloseable {
     }
 
     static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics, Supplier<Map<String, Object>> metrics) throws IOException {
+        return open(bindAddress, port, health, topics, metrics, null);
+    }
+
+    static AdminServer open(String bindAddress, int port, Supplier<BrokerHealth> health, Supplier<List<TopicSummary>> topics, Supplier<Map<String, Object>> metrics, TopicRegistry registry) throws IOException {
         InetAddress address;
         try {
             address = InetAddress.getByName(bindAddress);
@@ -79,7 +91,7 @@ final class AdminServer implements AutoCloseable {
                     return thread;
                 },
                 new ThreadPoolExecutor.CallerRunsPolicy());
-        AdminServer admin = new AdminServer(server, executor, health, topics, metrics);
+        AdminServer admin = new AdminServer(server, executor, health, topics, metrics, registry);
         server.createContext("/", admin::handle);
         server.setExecutor(executor);
         server.start();
@@ -130,13 +142,13 @@ final class AdminServer implements AutoCloseable {
                 return send(exchange, 200, topicsBody(), null);
             }
             if ("POST".equals(method)) {
-                return send(exchange, 404, error("NOT_FOUND", "Not found"), null);
+                return createTopic(exchange);
             }
             return send(exchange, 405, error("METHOD_NOT_ALLOWED", "Method not allowed"), "GET, POST");
         }
         if (topicPath(path)) {
             if ("DELETE".equals(method)) {
-                return send(exchange, 404, error("NOT_FOUND", "Not found"), null);
+                return deleteTopic(exchange, path.substring("/topics/".length()));
             }
             return send(exchange, 405, error("METHOD_NOT_ALLOWED", "Method not allowed"), "DELETE");
         }
@@ -169,6 +181,78 @@ final class AdminServer implements AutoCloseable {
             return "/";
         }
         return path;
+    }
+
+    private int createTopic(HttpExchange exchange) throws IOException {
+        if (registry == null) {
+            return send(exchange, 404, error("NOT_FOUND", "Not found"), null);
+        }
+        byte[] raw = readBody(exchange, POST_MAX_BYTES);
+        if (raw == null) {
+            return send(exchange, 400, error("MALFORMED_BODY", "Request body must be at most " + POST_MAX_BYTES + " bytes"), null);
+        }
+        String text = new String(raw, StandardCharsets.UTF_8);
+        Map<String, Object> body;
+        try {
+            body = Json.object(text);
+        } catch (IllegalArgumentException ex) {
+            return send(exchange, 400, error("MALFORMED_BODY", ex.getMessage()), null);
+        }
+        Object value = body.get("name");
+        if (!(value instanceof String name) || name.isEmpty()) {
+            return send(exchange, 400, error("MALFORMED_BODY", "name is required"), null);
+        }
+        TopicRegistry.Created created = registry.create(name);
+        switch (created.status()) {
+            case CREATED -> {
+                exchange.getResponseHeaders().set("Location", "/topics/" + name);
+                return send(exchange, 201, created.summary().toJson(), null);
+            }
+            case EXISTS -> {
+                return send(exchange, 409, error("TOPIC_EXISTS", "Topic already exists"), null);
+            }
+            case INVALID -> {
+                return send(exchange, 400, error("INVALID_TOPIC_NAME", "Topic names match " + TOPIC_NAME_RULE), null);
+            }
+            default -> {
+                TopicRegistry.CreateStatus unexpected = created.status();
+                throw new IllegalStateException("Unhandled create status " + unexpected);
+            }
+        }
+    }
+
+    private int deleteTopic(HttpExchange exchange, String name) throws IOException {
+        if (registry == null) {
+            return send(exchange, 404, error("NOT_FOUND", "Not found"), null);
+        }
+        TopicRegistry.DeleteStatus status = registry.delete(name);
+        switch (status) {
+            case DELETED -> {
+                exchange.sendResponseHeaders(204, -1);
+                return 204;
+            }
+            case NOT_FOUND -> {
+                return send(exchange, 404, error("UNKNOWN_TOPIC", "Unknown topic"), null);
+            }
+            case INVALID -> {
+                return send(exchange, 400, error("INVALID_TOPIC_NAME", "Topic names match " + TOPIC_NAME_RULE), null);
+            }
+            default -> {
+                TopicRegistry.DeleteStatus unexpected = status;
+                throw new IllegalStateException("Unhandled delete status " + unexpected);
+            }
+        }
+    }
+
+    private static byte[] readBody(HttpExchange exchange, int maxBytes) throws IOException {
+        try (InputStream input = exchange.getRequestBody()) {
+            byte[] bytes = input.readNBytes(maxBytes + 1);
+            if (bytes.length > maxBytes) {
+                input.transferTo(OutputStream.nullOutputStream());
+                return null;
+            }
+            return bytes;
+        }
     }
 
     private Map<String, Object> topicsBody() {

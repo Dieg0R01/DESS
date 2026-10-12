@@ -104,7 +104,7 @@ public final class Broker implements AutoCloseable {
                 }
                 AdminServer adminServer;
                 try {
-                    adminServer = AdminServer.open(config.adminBindAddress(), config.adminPort(), this::health, registry::summaries, this::metricsBody);
+                    adminServer = AdminServer.open(config.adminBindAddress(), config.adminPort(), this::health, registry::summaries, this::metricsBody, registry);
                 } catch (IOException ex) {
                     if (tracker != null) {
                         tracker.close(config.shutdownTimeoutMillis());

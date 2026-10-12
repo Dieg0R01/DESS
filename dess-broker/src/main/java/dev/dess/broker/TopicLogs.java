@@ -116,6 +116,16 @@ final class TopicLogs {
         return List.copyOf(logs.values());
     }
 
+    void delete(String topic) throws IOException {
+        synchronized (logs) {
+            TopicLog existing = logs.remove(topic);
+            if (existing != null) {
+                existing.close();
+            }
+            Files.deleteIfExists(directory.resolve(topic + ".log"));
+        }
+    }
+
     TopicLog openOrCreate(String topic) throws IOException {
         TopicLog existing = logs.get(topic);
         if (existing != null) {
