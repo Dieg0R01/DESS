@@ -8,7 +8,7 @@ DESS is a small event streaming platform inspired by the architecture of systems
 
 The goal is not to compete with production brokers, but to implement by hand — on top of the JDK — the building blocks that a distributed system relies on: networking over TCP and UDP, multithreading and synchronization, durable storage, XML configuration, TLS encryption, message integrity and a web management interface.
 
-> **Status:** protocol version 4 is implemented: a TLS 1.2+ broker with `produce` and `consume`. Confirmed messages are in the topic logs. The admin API is served on loopback.
+> **Status:** protocol version 4 is implemented: a TLS 1.2+ broker with `produce`, `consume` and `bench`. Confirmed messages are in the topic logs. The admin API is served on loopback. After a build and certificates, `./scripts/demo.sh` runs the end-to-end path.
 
 ---
 
@@ -21,8 +21,11 @@ The goal is not to compete with production brokers, but to implement by hand —
 - [Module map](#module-map)
 - [Technology stack](#technology-stack)
 - [Configuration](#configuration)
-- [Admin API](#admin-api)
 - [Getting started](#getting-started)
+- [Admin API](#admin-api)
+- [Performance](#performance)
+- [Known limitations](#known-limitations)
+- [License](#license)
 
 ---
 
@@ -237,16 +240,17 @@ DESS is organized as a multi-module build. Each module maps to one part of the s
 dess/
 ├── dess-common/        Shared protocol and domain model
 ├── dess-broker/        The broker server
-├── dess-client/        Producer and consumer client library + demo apps
+├── dess-client/        Producer, consumer and bench CLIs
 ├── dess-admin/         Command-line admin client for the REST API
-└── config/             Sample config.xml, keystores and scripts (keytool)
+├── config/             Sample config.xml, keystores and scripts (keytool)
+└── scripts/            End-to-end demo launcher
 ```
 
 | Module | Main packages | Responsibility |
 |--------|---------------|----------------|
 | `dess-common` | `protocol`, `model`, `security`, `json` | Frame encoding/decoding, `Message` and `Topic` value types, SHA-256 hashing utilities, JSON codec for admin bodies. No networking and no threads. |
 | `dess-broker` | `net`, `engine`, `storage`, `config`, `discovery`, `admin` | TCP/TLS acceptor and client handlers; topic registry, queues and dispatchers; append-only log; JAXB configuration; UDP discovery responder; loopback HTTP admin API. |
-| `dess-client` | `producer`, `consumer`, `discovery` | Reusable `Producer` and `Consumer` classes that handle discovery, connection, hashing and ACKs, plus runnable demo applications. |
+| `dess-client` | `dev.dess.client` | `produce`, `consume` and `bench` over TLS, UDP discovery, SHA-256 publish digests and acknowledgements. `IntegrityProbe` is a demo helper with its own `main`, not a second producer CLI. |
 | `dess-admin` | `cli`, `http` | Admin tool built on `java.net.http.HttpClient` to call the REST API. |
 
 Dependency direction is strictly one-way: `dess-broker`, `dess-client` and `dess-admin` depend on `dess-common`; none of them depend on each other.
@@ -385,6 +389,8 @@ A topic created while the broker is running, and a topic found only in a log fil
 mvn clean verify
 ```
 
+`mvn package` also leaves the shaded jars under each module's `target/` directory. `verify` runs the tests as well.
+
 ### Generate development certificates
 
 ```bash
@@ -421,16 +427,43 @@ java -jar dess-client/target/dess-client.jar produce --topic sales --message hel
 ```
 
 ```text
-Usage: dess-client produce|consume --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--host HOST] [--port N] [--discovery-port N] [--presence-ms N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]
+Usage: dess-client produce|consume|bench --topic NAME [--topic NAME] [--message TEXT] [--confirm BROKER|ALL] [--from latest|earliest|OFFSET] [--resume] [--resume-file PATH] [--payload-bytes N] [--producers N] [--consumers N] [--messages N] [--host HOST] [--port N] [--discovery-port N] [--presence-ms N] [--identity PATH] [--trust-store PATH] [--password-file PATH] [--heartbeat-ms N] [--log-level LEVEL]
 ```
 
-`consume` may repeat `--topic`. `produce` takes one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. `--confirm` is accepted only by `produce` and applies to every publish: `BROKER` (the default) or `ALL`. Any other value exits 2. The consumer prints the topic, one space, the payload and a newline, then acknowledges that delivery with the topic and offset.
+`consume` may repeat `--topic`. `produce` and `bench` take one `--topic`. With `--message`, the producer publishes that UTF-8 text and exits 0 after the acknowledgement. Without `--message`, each line from standard input is one payload. `--confirm` is accepted only by `produce` and applies to every publish: `BROKER` (the default) or `ALL`. Any other value exits 2. The consumer prints the topic, one space, the payload and a newline, then acknowledges that delivery with the topic and offset.
 
 `--from` is `consume` only. `latest` starts at the next offset, `earliest` replays from offset 0, and `OFFSET` is a decimal integer from 0 up. The default is `latest`. `--resume` is `consume` only: each topic starts at its stored offset plus one, or at `latest` when the offset file has no line for it. After printing a delivery the client rewrites that file, forcing a temporary sibling and moving it into place, and only then sends the acknowledgement. `--resume-file` defaults to `dess-offsets` in the working directory and, by itself, neither reads nor writes. `--resume` together with `--from` exits 2. `produce` rejects `--from`, `--resume` and `--resume-file` with exit 2. `consume` without `--from` and without `--resume` subscribes at `latest` and does not write an offset file.
 
 An error from the broker, including `UNKNOWN_TOPIC`, `BROKER_BUSY`, `ACK_TIMEOUT`, `SLOW_CONSUMER`, `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED`, `INTEGRITY_FAILED` and `TOPIC_DELETED`, prints one line containing the code and exits 1. `TOPIC_DELETED` is fatal only when no subscription remains; otherwise the consumer drops that topic and continues. An `ACK_TIMEOUT` line also contains the expected and received counts. The broker leaves the connection open for `STORAGE_UNAVAILABLE`, `INVALID_OFFSET`, `UNAUTHORIZED`, `INTEGRITY_FAILED` and `TOPIC_DELETED`. A `DELIVER` whose digest does not match prints `INTEGRITY_FAILED` with the topic and offset, does not print the payload, and exits 1.
 
-Without `--host` the client discovers the broker on UDP port 55124. `--host` skips discovery and `--port` then defaults to 55123. `--port` without `--host` exits 2. `--identity` defaults to `./config/pki/producer.p12` for `produce` and `./config/pki/consumer.p12` for `consume`. `--trust-store` defaults to `./config/pki/trust.p12` and `--password-file` to `./config/pki/password`. A handshake failure prints one line naming `EXPIRED`, `UNTRUSTED`, `NOT_BROKER` or `PROTOCOL_VERSION` and exits 1. `--presence-ms N` announces the certificate `CN` every N milliseconds when the broker has presence enabled.
+Without `--host` the client discovers the broker on UDP port 55124. `--host` skips discovery and `--port` then defaults to 55123. `--port` without `--host` exits 2. `--identity` defaults to `./config/pki/producer.p12` for `produce` and `bench`, and to `./config/pki/consumer.p12` for `consume`. `--trust-store` defaults to `./config/pki/trust.p12` and `--password-file` to `./config/pki/password`. A handshake failure prints one line naming `EXPIRED`, `UNTRUSTED`, `NOT_BROKER` or `PROTOCOL_VERSION` and exits 1. `--presence-ms N` announces the certificate `CN` every N milliseconds when the broker has presence enabled.
+
+### Measure throughput
+
+`bench` is a `dess-client` command. It opens N producer sessions and M consumer sessions in one JVM, publishes `--messages` payloads per producer (default payload 1024 bytes), waits for every unique delivery, and prints a KEY VALUE report. Confirmation is `BROKER`. Consumers subscribe from `earliest`. Producer sessions use `--identity` (default `producer.p12`); consumer sessions use `consumer.p12` next to that identity.
+
+```bash
+java -jar dess-client/target/dess-client.jar bench --topic bench --payload-bytes 1024 --producers 1 --consumers 1 --messages 10000
+```
+
+`--payload-bytes`, `--producers` and `--consumers` default to 1024, 1 and 1. Each must be at least 1. `--messages` is required. `--host`, `--port` and `--discovery-port` follow `produce`: `--port` without `--host` exits 2. Unknown flags or a missing `--topic` exit 2 with the usage line. A refused connect or a broker `ERROR` exits 1.
+
+Stdout after shutdown looks like:
+
+```text
+payloadBytes 1024
+producers 1
+consumers 1
+messages 10000
+messagesPerSecond 1842.5
+latencyP50Ms 1.2
+latencyP99Ms 8.4
+os Mac OS X 15.6 aarch64
+processors 10
+maxMemoryBytes 4294967296
+```
+
+`messagesPerSecond` is producers × messages divided by wall seconds, counted from unique deliveries. Latency is publish to the first matching `DELIVER`, in milliseconds. If the OS load average is greater than the processor count, a final line `loadWarning true` is added.
 
 ### Query the admin API
 
@@ -452,6 +485,22 @@ Usage: dess-admin [--url URL] [--json] [--log-level LEVEL] topics list|create NA
 ```
 
 `--url` is the origin only and defaults to `http://127.0.0.1:55125`. `--json` prints the response body. Without it, stdout is a table. HTTP 2xx exits 0. HTTP 400 or higher, a connect failure, or a body that is not the documented JSON exits 1 and prints the status (or `UNREACHABLE`) plus the error `message` when the body has that shape. Unknown commands, a missing name, or `--url` without a value exit 2. `--help` and `-h` print the name, version and usage, then exit 0.
+
+### Run the demo
+
+After `mvn clean verify` or `mvn package`, and after `config/generate-certs.sh`:
+
+```bash
+mvn clean verify
+config/generate-certs.sh
+./scripts/demo.sh
+```
+
+`DEMO_CONFIG=path/to.xml ./scripts/demo.sh` overrides `config/config.xml`. The script copies that document into a work directory so the sample file is left unchanged.
+
+The launcher starts `dess-broker`, two `consume` clients (`--from earliest` and `--resume`), two `produce` invocations, then `java -cp dess-client/target/dess-client.jar dev.dess.client.IntegrityProbe --topic demo`. That helper is not a second producer CLI: `java -jar dess-client.jar` still launches `produce`, `consume` or `bench`. The probe publishes one payload whose digest is 32 zero bytes so the broker answers `INTEGRITY_FAILED` and the process exits 0. The script then calls `dess-admin health` and `metrics` on the bound admin port, sends SIGTERM to the broker from this parent process, starts it again on the same config and log directory, observes recovery, produces one more payload, and stops every child.
+
+Exit 0 means every step succeeded and no child is still running. A failed step prints its name and exits 1. Missing jars or PKI exit 2. If the broker cannot bind its TCP, discovery or admin port, the script reprints `Could not bind port`, `Could not bind admin port` or `Could not bind discovery port` and `Change the matching element in config/config.xml`.
 
 ---
 
@@ -565,6 +614,32 @@ A known path with the wrong method is `405` and `Allow` lists the methods that p
 
 ---
 
+## Performance
+
+`dess-client bench` records these rows: 1 KiB payloads, TLS, durability `ALWAYS`, loopback, consumer count equal to producer count. Throughput is unique deliveries (producers × messages) per wall second. Latency is publish to the first matching `DELIVER`. Hardware is the `os`, `processors` and `maxMemoryBytes` lines from that run.
+
+| Producers | Consumers | Payload | Durability | Transport | messages/s | p50 (ms) | p99 (ms) | Hardware |
+|-----------|-----------|---------|------------|-----------|------------|----------|----------|----------|
+| 1 | 1 | 1 KiB | ALWAYS | TLS, loopback | — | — | — | — |
+| 4 | 4 | 1 KiB | ALWAYS | TLS, loopback | — | — | — | — |
+| 16 | 16 | 1 KiB | ALWAYS | TLS, loopback | — | — | — | — |
+
+The documented goal is 5,000 messages/s. A single broker that forces every log record under `ALWAYS` and wraps every session in TLS typically lands below that rate; the table is the measured limit, not a hidden shortfall.
+
+---
+
+## Known limitations
+
+- One broker process: no replication and no leader election.
+- Topics are not partitioned and consumers do not form groups.
+- A lost producer `ACK` is retried as at-least-once; the broker does not offer exactly-once produce.
+- Topic logs grow without retention or compaction.
+- There is no certificate revocation list.
+- The wire protocol is DESS version 4. It is not Kafka, AMQP or MQTT.
+- There is no web dashboard and no SOAP admin API.
+
+---
+
 ## License
 
-To be defined.
+DESS is course work for a Distributed Systems class. The repository is published so students and evaluators can read and run the code. That is not a license grant for production use, and no SPDX identifier is attached.
