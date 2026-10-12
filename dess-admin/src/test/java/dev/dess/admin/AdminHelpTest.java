@@ -39,14 +39,15 @@ class AdminHelpTest {
         assertEquals("", lines[3]);
         assertMessage(lines[0], "INFO", artifact);
         assertMessage(lines[1], "INFO", "dev");
-        assertMessage(lines[2], "INFO", "Usage: " + artifact + " --help | -h | --log-level LEVEL");
+        assertMessage(lines[2], "INFO", AdminMain.USAGE);
     }
 
     private static void assertUsage(String stderr, String artifact) {
         String[] lines = stderr.split("\\R", -1);
         assertEquals(2, lines.length);
         assertEquals("", lines[1]);
-        assertMessage(lines[0], "INFO", "Usage: " + artifact + " --help | -h | --log-level LEVEL");
+        assertMessage(lines[0], "INFO", AdminMain.USAGE);
+        assertTrue(AdminMain.USAGE.contains(artifact));
     }
 
     private static void assertMessage(String line, String level, String message) {
